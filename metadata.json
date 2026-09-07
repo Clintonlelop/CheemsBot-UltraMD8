@@ -1,0 +1,6 @@
+{
+  "name": "CheemsBot MD8 WhatsApp Bot",
+  "description": "WhatsApp Multi-Device Bot with live QR scanner and command engine",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,35 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+web_modules/
+
+# Local session credentials (extremely important to not commit your WhatsApp session keys!)
+session/
+creds.json
+session-keys/
+
+# Environment files and keys
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Build and cache outputs
+dist/
+build/
+node-compile-cache/
+.replit
+replit.nix
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# System Files
+.DS_Store
+Thumbs.db

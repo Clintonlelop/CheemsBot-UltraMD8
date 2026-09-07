@@ -1,0 +1,8 @@
+{
+  "groupEnabled": true,
+  "privateEnabled": true,
+  "voiceReply": true,
+  "humorLevel": "witty",
+  "systemPersona": "short_human",
+  "tagOrReplyOnly": true
+}
