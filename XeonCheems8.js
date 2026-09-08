@@ -23,6 +23,8 @@ const { XeonIgImg } = require('./scrape/XeonIgImg')
 const { XeonFb } = require('./scrape/XeonFb')
 const { XeonTwitter } = require('./scrape/XeonTwitter')
 const { askGemini, generateGeminiImage } = require('./lib/gemini')
+const { askQwen } = require('./lib/qwen')
+const { gifToMp4, audioToPttOgg } = require('./lib/media-tools')
 const { repairSessionFolder, purgeJidSession } = require('./lib/sessionCleaner')
 const { downloadTikTok } = require('./lib/tiktokdl')
 const { searchApk, getApkDetails, getApkVersions, getApkBuffer } = require('./lib/apkdl')
@@ -302,30 +304,24 @@ try {
         }
         
         //theme sticker reply
-        const XeonStickWait = () => {
-        let XeonStikRep = fs.readFileSync('./XeonMedia/theme/sticker_reply/wait.webp')
-        XeonBotInc.sendMessage(from, { sticker: XeonStikRep }, { quoted: m })
+        const sendThemeSticker = (file) => {
+            try {
+                let XeonStikRep = fs.readFileSync(`./XeonMedia/theme/sticker_reply/${file}.webp`)
+                if (XeonStikRep.length < 200 || XeonStikRep.slice(0, 4).toString() !== 'RIFF') {
+                    console.log(`[StickerReply] ${file}.webp is invalid/corrupted, skipping sticker reply`)
+                    return
+                }
+                XeonBotInc.sendMessage(from, { sticker: XeonStikRep }, { quoted: m })
+            } catch (e) {
+                console.log('[StickerReply Error]', e?.message || e)
+            }
         }
-        const XeonStickAdmin = () => {
-        let XeonStikRep = fs.readFileSync('./XeonMedia/theme/sticker_reply/admin.webp')
-        XeonBotInc.sendMessage(from, { sticker: XeonStikRep }, { quoted: m })
-        }
-        const XeonStickBotAdmin = () => {
-        let XeonStikRep = fs.readFileSync('./XeonMedia/theme/sticker_reply/botadmin.webp')
-        XeonBotInc.sendMessage(from, { sticker: XeonStikRep }, { quoted: m })
-        }
-        const XeonStickOwner = () => {
-        let XeonStikRep = fs.readFileSync('./XeonMedia/theme/sticker_reply/owner.webp')
-        XeonBotInc.sendMessage(from, { sticker: XeonStikRep }, { quoted: m })
-        }
-        const XeonStickGroup = () => {
-        let XeonStikRep = fs.readFileSync('./XeonMedia/theme/sticker_reply/group.webp')
-        XeonBotInc.sendMessage(from, { sticker: XeonStikRep }, { quoted: m })
-        }
-        const XeonStickPrivate = () => {
-        let XeonStikRep = fs.readFileSync('./XeonMedia/theme/sticker_reply/private.webp')
-        XeonBotInc.sendMessage(from, { sticker: XeonStikRep }, { quoted: m })
-        }
+        const XeonStickWait = () => sendThemeSticker('wait')
+        const XeonStickAdmin = () => sendThemeSticker('admin')
+        const XeonStickBotAdmin = () => sendThemeSticker('botadmin')
+        const XeonStickOwner = () => sendThemeSticker('owner')
+        const XeonStickGroup = () => sendThemeSticker('group')
+        const XeonStickPrivate = () => sendThemeSticker('private')
                    
         //TIME
         const xtime = moment.tz('Asia/Kolkata').format('HH:mm:ss')
@@ -4773,8 +4769,15 @@ case 'fox_girl': case 'foxgirl': case 'gecg': case 'feed': case 'meow': case 'li
 
     try {
         const buffer = await getBuffer(imageUrl);
+        const giftMagic = buffer.slice(0, 12).toString('latin1');
+        if (!buffer || buffer.length < 1000 || !(/^\x89PNG/.test(giftMagic) || /^GIF8/.test(giftMagic) || /^\xff\xd8/.test(giftMagic) || /^RIFF/.test(giftMagic))) throw new Error('Gift media failed to download (empty or invalid data)');
+        let mp4Buf = buffer
+        if (buffer.slice(0, 3).toString('latin1') === 'GIF8') {
+            try { mp4Buf = await gifToMp4(buffer) } catch (cvErr) { console.log('[Gift Convert Error]', cvErr?.message || cvErr) }
+        }
         await XeonBotInc.sendMessage(from, {
-            video: buffer,
+            video: mp4Buf,
+            mimetype: mp4Buf === buffer ? 'image/gif' : 'video/mp4',
             gifPlayback: true,
             caption: captionText,
             mentions: [m.sender, target]
@@ -7173,16 +7176,23 @@ if (!text) return replygcxeon('Where is the text?')
                 slow: false,
                 host: "https://translate.google.com",
             })
-            return XeonBotInc.sendMessage(m.chat, {
-                audio: {
-                    url: xeonrl,
-                },
-                mimetype: 'audio/mp4',
-                ptt: true,
-                fileName: `${text}.mp3`,
-            }, {
-                quoted: m,
-            })
+            try {
+                const ttsRes = await axios.get(xeonrl, { responseType: 'arraybuffer', timeout: 20000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } })
+                const ttsBuf = Buffer.from(ttsRes.data)
+                if (!ttsBuf || ttsBuf.length < 500) throw new Error('TTS engine returned empty audio')
+                let pttBuf
+                try { pttBuf = await audioToPttOgg(ttsBuf) } catch (convErr) { pttBuf = ttsBuf }
+                return XeonBotInc.sendMessage(m.chat, {
+                    audio: pttBuf,
+                    mimetype: 'audio/ogg; codecs=opus',
+                    ptt: true,
+                }, {
+                    quoted: m,
+                })
+            } catch (ttsErr) {
+                console.log('[TTS Error]', ttsErr?.message || ttsErr)
+                return replygcxeon(`❌ Text-to-speech failed: ${ttsErr?.message || 'audio engine unavailable'}`)
+            }
         }
         break
         case 'telestick': { //credit agan
@@ -7250,6 +7260,26 @@ function __lobz(){const H=['R53FWbciV9','reply','rbot_18407','\x5c(\x20*\x5c)','
         } catch (err) {
             console.error('[AI Image Error]', err)
             return replygcxeon(`❌ *Failed to generate image:*\n${err?.message || 'Generation engine busy. Please retry.'}`)
+        }
+    }
+    break
+    case 'qwen': case 'qwenai': case 'qw': {
+        const qwPrompt = q || text || args.join(' ')
+        if (!qwPrompt) {
+            return replygcxeon(`🤖 *Qwen AI* (Alibaba)
+
+Usage:
+• ${prefix + command} <your question>
+
+Example:
+${prefix + command} explain quantum computing simply`)
+        }
+        try {
+            const qwReply = await askQwen(qwPrompt)
+            return replygcxeon(qwReply)
+        } catch (error) {
+            console.error('[Qwen AI Error]', error)
+            return replygcxeon(`❌ *Qwen AI Error:* ${error?.message || error}`)
         }
     }
     break

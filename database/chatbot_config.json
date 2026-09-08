@@ -1,6 +1,6 @@
 {
-  "groupEnabled": true,
-  "privateEnabled": true,
+  "groupEnabled": false,
+  "privateEnabled": false,
   "voiceReply": true,
   "humorLevel": "witty",
   "systemPersona": "short_human",
