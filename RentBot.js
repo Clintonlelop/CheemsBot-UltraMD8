@@ -8,7 +8,7 @@ const log = (pino = require("pino"));
 const qrcode = require('qrcode');
 const rimraf = require("rimraf");
 const { imageToWebp, videoToWebp, writeExifImg, writeExifVid } = require('./lib/exif')
-const { smsg, isUrl, generateMessageTag, getBuffer, getSizeMedia, fetchJson, await, sleep, reSize } = require('./lib/myfunc')
+const { smsg, isUrl, generateMessageTag, getBuffer, getSizeMedia, fetchJson, sleep, reSize } = require('./lib/myfunc')
 let owner = []
 try {
   const ownerPath = path.join(__dirname, 'database/owner.json')
