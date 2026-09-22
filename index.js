@@ -34,6 +34,35 @@ const { repairSessionFolder, purgeJidSession } = require('./lib/sessionCleaner')
 const { handleAutoViewOnce, handleAntiDelete } = require('./lib/viewonce-antidelete')
 const express = require('express')
 const QRCode = require('qrcode')
+const readline = require('readline')
+
+const question = (text, timeoutMs = 60000) => {
+    return new Promise((resolve) => {
+        const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout
+        });
+        
+        let resolved = false;
+        
+        const timer = setTimeout(() => {
+            if (!resolved) {
+                resolved = true;
+                rl.close();
+                resolve('timeout');
+            }
+        }, timeoutMs);
+
+        rl.question(text, (value) => {
+            if (!resolved) {
+                resolved = true;
+                clearTimeout(timer);
+                rl.close();
+                resolve(value);
+            }
+        });
+    });
+};
 
 // Global log/error interceptors to dynamically heal WhatsApp session decryption / Bad MAC errors in real-time
 const originalConsoleError = console.error;
@@ -329,6 +358,47 @@ async function XeonBotIncBot() {
 		console.log('[Session Init Cleaner]', e?.message || e)
 	}
 	const { saveCreds, state } = await useMultiFileAuthState(authDir)
+
+	let connectionOption = 'qr'
+	let phoneNumberToPair = ''
+
+	if (!state.creds.registered) {
+		console.log(color('\n==================================================', 'cyan'))
+		console.log(color('🤖 CLINTON BOT CONNECTION MENU', 'green'))
+		console.log(color('==================================================', 'cyan'))
+		console.log(color('1. Scan with QR Code (prints in terminal & shows on web)', 'yellow'))
+		console.log(color('2. Use Pairing Code (prompts for number & prints code)', 'yellow'))
+		console.log(color('==================================================\n', 'cyan'))
+
+		const choice = await question(color('Choose option (1 or 2, defaults to 1 after 30 seconds): ', 'green'), 30000)
+		
+		if (choice === 'timeout') {
+			console.log(color('\n[Timeout] No input received within 30s. Defaulting to QR Code mode.', 'yellow'))
+			connectionOption = 'qr'
+		} else if (choice.trim() === '2') {
+			connectionOption = 'pairing'
+			const num = await question(color('\nOkay, input your phone number (with country code, e.g., 2348160208114): ', 'green'), 45000)
+			if (num === 'timeout' || !num.trim()) {
+				console.log(color('\nNo number entered. Defaulting to QR Code mode.', 'yellow'))
+				connectionOption = 'qr'
+			} else {
+				phoneNumberToPair = num.replace(/[^0-9]/g, '')
+				if (!phoneNumberToPair || phoneNumberToPair.length < 8) {
+					console.log(color('\nInvalid phone number. Defaulting to QR Code mode.', 'red'))
+					connectionOption = 'qr'
+				} else {
+					console.log(color(`\nSelected Pairing Code connection for: +${phoneNumberToPair}`, 'green'))
+				}
+			}
+		} else {
+			console.log(color('\nSelected QR Code connection.', 'green'))
+			connectionOption = 'qr'
+		}
+	} else {
+		connectionOption = 'registered'
+	}
+
+	const usePairingCode = (connectionOption === 'pairing')
 	const groupMetadataCache = new Map()
 	const welcomeGroupsPath = path.join(__dirname, 'database', 'welcome.json')
 	const goodbyeGroupsPath = path.join(__dirname, 'database', 'goodbye.json')
@@ -356,7 +426,6 @@ async function XeonBotIncBot() {
 			return groupMetadataCache.get(jid) || null
 		}
 	}
-	const usePairingCode = global.usePairingCode !== false || process.argv.includes('--pairing-code')
 	const { version } = await fetchLatestBaileysVersion()
     	const msgRetryCounterCache = new NodeCache({ stdTTL: 300, checkperiod: 60 })
     	const XeonBotInc = XeonBotIncConnect({
@@ -389,6 +458,21 @@ async function XeonBotIncBot() {
     }
     XeonBotInc.public = true
 
+    // Request pairing code if pairing mode is chosen and not registered
+    if (connectionOption === 'pairing' && phoneNumberToPair && !state.creds.registered) {
+        setTimeout(async () => {
+            try {
+                let code = await XeonBotInc.requestPairingCode(phoneNumberToPair);
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
+                console.log(color(`\n==================================================`, 'cyan'));
+                console.log(color(`🔑 YOUR PAIRING CODE: ${code}`, 'green'));
+                console.log(color(`==================================================\n`, 'cyan'));
+            } catch (err) {
+                console.error(color('[Pairing Error] Failed to generate pairing code:', 'red'), err?.message || err);
+            }
+        }, 3000);
+    }
+
 XeonBotInc.ev.on('connection.update', async (update) => {
 	const {
 		connection,
@@ -400,6 +484,11 @@ try{
 			const isNewQr = currentQr !== qr
 			currentQr = qr
 			botStatus = 'Scan QR Code or Enter Pairing Code'
+			if (connectionOption === 'qr') {
+				console.log(color('\n--- WHATSAPP SCAN QR CODE ---', 'cyan'));
+				qrcodeterminal.generate(qr, { small: true });
+				console.log(color('-----------------------------\n', 'cyan'));
+			}
 			if (!qrLinkPrinted) {
 				qrLinkPrinted = true
 				console.log(color('\n==================================================', 'cyan'))
@@ -513,25 +602,7 @@ XeonBotInc.ev.on('creds.update', async () => {
 	}
 })
 
-let pairingRequested = false
-
-XeonBotInc.ev.on('connection.update', async (update) => {
-	if (update.qr && !pairingRequested && !XeonBotInc.authState?.creds?.registered) {
-		pairingRequested = true
-		try {
-			const number = (global.ownernumber || '').replace(/\D/g, '')
-			const pairingCode = number ? await XeonBotInc.requestPairingCode(number) : null
-			if (pairingCode) {
-				console.log(color(`\n🔗 Pairing code: ${pairingCode}`, 'green'))
-				console.log(color('Open WhatsApp > Link a device > Link with phone number instead of QR.', 'yellow'))
-			}
-		} catch (err) {
-			console.log(color('Pairing code request failed: ' + err.message, 'yellow'))
-		}
-	}
-})
-
-    // Anti Call
+// Anti Call
     XeonBotInc.ev.on('call', async (XeonPapa) => {
     let botNumber = await XeonBotInc.decodeJid(XeonBotInc.user.id)
     let XeonBotNum = db.settings[botNumber].anticall
