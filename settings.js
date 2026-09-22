@@ -13,8 +13,9 @@ global.antispam = true //auto kick spammer (true to on, false to off)
 //pairing code setup
 global.usePairingCode = true // Set to true to use Pairing Code in terminal (NO Web link or QR scan required!), set to false for QR code
 
-// OpenAI key
-global.keyopenai = process.env.OPENAI_API_KEY || ""
+// Custom API / OpenAI key
+global.customApiKey = process.env.CUSTOM_API_KEY || process.env.OPENAI_API_KEY || "sk-ws-H.DDRPIYY.4Mt5.MEUCIQDewvaUX5UpNVng9yhUWlq_hzaMsVK60h_lIAtx4r4u3wIgGsCSPRsE2nl8NCPlc56rbKe4vFOUe3KQWMpSxceV99Q"
+global.keyopenai = global.customApiKey
 
 //documents variants
 global.doc1 = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
