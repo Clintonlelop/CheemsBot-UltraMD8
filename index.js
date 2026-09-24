@@ -1,3 +1,4 @@
+global.process.env.TZ = global.process.env.TZ || 'Africa/Lagos';
 const { modul } = require('./module');
 global.serverLogs = [];
 const originalLog = console.log;
@@ -33,7 +34,7 @@ console.warn = (...args) => {
 };
 
 const moment = require('moment-timezone');
-const { baileys, boom, chalk, fs, figlet, FileType, path, pino, process, PhoneNumber, axios, yargs, _, qrcodeterminal } = modul;
+const { baileys, boom, chalk, fs, figlet, FileType, path, pino, PhoneNumber, axios, yargs, _, qrcodeterminal } = modul;
 const { Boom } = boom
 const NodeCache = require('node-cache')
 const { makeInMemoryStore } = require('./lib/store')
@@ -190,9 +191,9 @@ const store = makeInMemoryStore({ logger: pino().child({ level: 'silent', stream
 require('./XeonCheems8.js')
 nocache('./XeonCheems8.js', module => console.log(color('[ CHANGE ]', 'green'), color(`'${module}'`, 'green'), 'Updated'))
 
-// Lightweight HTTP server on process.env.PORT || 3000 for platform health check & preview
+// Lightweight HTTP server on port 3000 for platform health check & preview
 const httpApp = express()
-const PORT = process.env.PORT || 3000
+const PORT = process.env.APP_PORT || 3000
 
 httpApp.get('/qr-image', (req, res) => {
   if (!currentQr) {
@@ -245,9 +246,216 @@ httpApp.get('/logs', (req, res) => {
   res.json(global.serverLogs || [])
 })
 
-httpApp.all(['/reset-session', '/api/reset-session', '/delete-session'], async (req, res) => {
+httpApp.get('/cheemspic.jpg', (req, res) => {
+  const p = path.join(__dirname, 'XeonMedia', 'theme', 'cheemspic.jpg')
+  if (fs.existsSync(p)) {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+    return res.sendFile(p)
+  }
+  res.status(404).send('Banner not found')
+})
+
+httpApp.post('/upload-cheemspic', express.json({ limit: '50mb' }), (req, res) => {
   try {
-    console.log(color('\n[SESSION RESET] Manual session purge requested. Wiping session directory and backup creds...', 'yellow'))
+    const base64Data = req.body.image
+    if (!base64Data) return res.status(400).json({ error: 'No image data provided' })
+    const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '')
+    const buffer = Buffer.from(cleanBase64, 'base64')
+    const targetPath = path.join(__dirname, 'XeonMedia', 'theme', 'cheemspic.jpg')
+    const targetDir = path.dirname(targetPath)
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true })
+    fs.writeFileSync(targetPath, buffer)
+    global.thum = buffer
+    global.thumb = buffer
+    console.log(color('\n[THEME BANNER] cheemspic.jpg successfully updated from web dashboard!\n', 'green'))
+    res.json({ success: true, message: 'cheemspic.jpg successfully updated!' })
+  } catch (err) {
+    console.error('[THEME BANNER ERROR]', err)
+    res.status(500).json({ error: err?.message || 'Failed to update cheemspic' })
+  }
+})
+
+const handleUploadSession = async (req, res) => {
+  try {
+    const authDir = path.join(__dirname, global.sessionName || 'session');
+    const dbDir = path.join(__dirname, 'database');
+    const backupCredsPath = path.join(dbDir, 'session_creds_backup.json');
+    if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
+    if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+
+    const cleanStaleKeys = () => {
+      try {
+        const files = fs.readdirSync(authDir);
+        for (const file of files) {
+          if (file.startsWith('pre-key') || file.startsWith('session-') || file.startsWith('sender-key')) {
+            try { fs.unlinkSync(path.join(authDir, file)); } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    };
+
+    const extractCreds = (input) => {
+      if (!input) return null;
+      let obj = input;
+      if (typeof obj === 'string') {
+        const trimmed = obj.trim();
+        // Check if raw JSON
+        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+          try { obj = JSON.parse(trimmed); } catch (_) {}
+        }
+        // Check if Base64 string
+        if (typeof obj === 'string') {
+          try {
+            const decoded = Buffer.from(trimmed.replace(/^data:.*?;base64,/, ''), 'base64').toString('utf8');
+            if (decoded.trim().startsWith('{')) obj = JSON.parse(decoded);
+          } catch (_) {}
+        }
+      }
+      if (obj && typeof obj === 'object') {
+        if (obj.creds && typeof obj.creds === 'object') return obj.creds;
+        if (obj.session && typeof obj.session === 'object') return obj.session;
+        if (obj.data && typeof obj.data === 'object') return obj.data;
+        if (obj.noiseKey || obj.signedIdentityKey || obj.registrationId || obj.me) return obj;
+      }
+      return null;
+    };
+
+    // 1. Multiple Files / Entire Session Folder Upload
+    if (Array.isArray(req.body.files) && req.body.files.length > 0) {
+      let savedCount = 0;
+      let credsFound = null;
+
+      cleanStaleKeys();
+
+      for (const item of req.body.files) {
+        if (!item || !item.name) continue;
+        const cleanName = path.basename(item.name);
+        const targetPath = path.join(authDir, cleanName);
+        let fileBuffer;
+        if (item.data) {
+          const raw = String(item.data).replace(/^data:.*?;base64,/, '');
+          fileBuffer = Buffer.from(raw, item.isBase64 ? 'base64' : 'utf8');
+        } else if (item.content) {
+          fileBuffer = Buffer.from(item.content, 'utf8');
+        }
+        if (fileBuffer) {
+          fs.writeFileSync(targetPath, fileBuffer);
+          savedCount++;
+          if (cleanName === 'creds.json') {
+            credsFound = extractCreds(fileBuffer.toString('utf8'));
+          }
+        }
+      }
+
+      if (credsFound) {
+        fs.writeFileSync(backupCredsPath, JSON.stringify(credsFound, null, 2));
+      }
+
+      console.log(color(`\n[SESSION IMPORT] Folder import: ${savedCount} files saved into session/!\n`, 'green'));
+    }
+    // 2. Direct creds / session text or JSON
+    else if (req.body.creds || req.body.session) {
+      const credsObj = extractCreds(req.body.creds || req.body.session);
+      if (!credsObj) {
+        return res.status(400).json({ success: false, error: 'Could not extract valid WhatsApp credentials from the input' });
+      }
+
+      cleanStaleKeys();
+      fs.writeFileSync(path.join(authDir, 'creds.json'), JSON.stringify(credsObj, null, 2));
+      fs.writeFileSync(backupCredsPath, JSON.stringify(credsObj, null, 2));
+      console.log(color('\n[SESSION IMPORT] creds.json imported and backed up successfully!\n', 'green'));
+    } 
+    // 3. Uploaded Single File (JSON or ZIP)
+    else if (req.body.fileData && req.body.fileName) {
+      const fileName = (req.body.fileName || '').toLowerCase();
+      const base64Data = String(req.body.fileData).replace(/^data:.*?;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+
+      if (fileName.endsWith('.zip')) {
+        const os = require('os');
+        const tmpZip = path.join(os.tmpdir(), `session_upload_${Date.now()}.zip`);
+        fs.writeFileSync(tmpZip, buffer);
+        try {
+          const { execSync } = require('child_process');
+          cleanStaleKeys();
+          execSync(`unzip -o -q "${tmpZip}" -d "${authDir}"`);
+          // Hoist nested session folder if present
+          const extractedFiles = fs.readdirSync(authDir);
+          const nestedSession = extractedFiles.find(f => {
+            const p = path.join(authDir, f);
+            return fs.statSync(p).isDirectory() && (f.toLowerCase() === 'session' || f.toLowerCase().includes('session'));
+          });
+          if (nestedSession) {
+            const nestedPath = path.join(authDir, nestedSession);
+            for (const item of fs.readdirSync(nestedPath)) {
+              fs.renameSync(path.join(nestedPath, item), path.join(authDir, item));
+            }
+          }
+
+          // Backup creds.json if present
+          const mainCredsPath = path.join(authDir, 'creds.json');
+          if (fs.existsSync(mainCredsPath)) {
+            try {
+              const parsed = JSON.parse(fs.readFileSync(mainCredsPath, 'utf8'));
+              if (parsed.noiseKey || parsed.me) {
+                fs.writeFileSync(backupCredsPath, JSON.stringify(parsed, null, 2));
+              }
+            } catch (_) {}
+          }
+          console.log(color('\n[SESSION IMPORT] session.zip successfully unpacked into session/ folder!\n', 'green'));
+        } finally {
+          try { fs.unlinkSync(tmpZip); } catch (e) {}
+        }
+      } else if (fileName.endsWith('.json')) {
+        const strContent = buffer.toString('utf8');
+        const credsObj = extractCreds(strContent);
+        if (credsObj) {
+          cleanStaleKeys();
+          fs.writeFileSync(path.join(authDir, 'creds.json'), JSON.stringify(credsObj, null, 2));
+          fs.writeFileSync(backupCredsPath, JSON.stringify(credsObj, null, 2));
+          console.log(color(`\n[SESSION IMPORT] creds.json verified and saved into session/!\n`, 'green'));
+        } else {
+          // Normal json file
+          fs.writeFileSync(path.join(authDir, req.body.fileName), buffer);
+          console.log(color(`\n[SESSION IMPORT] ${req.body.fileName} saved into session/!\n`, 'green'));
+        }
+      } else {
+        return res.status(400).json({ success: false, error: 'Please upload a .json file, a .zip archive, or a session folder' });
+      }
+    } else {
+      return res.status(400).json({ success: false, error: 'No session data provided' });
+    }
+
+    // Terminate existing Baileys socket so it reconnects with the newly imported session
+    if (global.activeSocket || global.XeonBotInc) {
+      try {
+        if (global.activeSocket?.end) global.activeSocket.end(new Error('New session imported'));
+        if (global.XeonBotInc?.ws?.close) global.XeonBotInc.ws.close();
+      } catch (e) {}
+      global.activeSocket = null;
+    }
+
+    botStatus = 'New session imported. Connecting to WhatsApp...';
+    global.reconnecting = false;
+
+    // Trigger bot connection
+    setTimeout(() => {
+      XeonBotIncBot().catch(console.error);
+    }, 1000);
+
+    return res.json({ success: true, message: 'Session imported successfully! Connecting to WhatsApp...' });
+  } catch (err) {
+    console.error('[SESSION IMPORT ERROR]', err);
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to import session' });
+  }
+};
+
+httpApp.post('/upload-session', express.json({ limit: '100mb' }), handleUploadSession);
+httpApp.post('/api/upload-session', express.json({ limit: '100mb' }), handleUploadSession);
+
+const handleResetSession = async (req, res) => {
+  try {
+    console.log(color('\n[SESSION RESET] Complete session purge requested. Deleting session directory and preventing auto-restore...', 'yellow'))
     
     // Clean up active socket
     if (global.activeSocket || global.XeonBotInc) {
@@ -276,7 +484,7 @@ httpApp.all(['/reset-session', '/api/reset-session', '/delete-session'], async (
 
     currentQr = ''
     connectedUser = null
-    botStatus = 'Session reset. Generating new QR / Pairing code...'
+    botStatus = 'Session wiped clean. Ready for new QR scan, pairing code, or session import.'
     global.reconnecting = false
 
     // Trigger restart
@@ -284,12 +492,16 @@ httpApp.all(['/reset-session', '/api/reset-session', '/delete-session'], async (
       XeonBotIncBot().catch(console.error)
     }, 1000)
 
-    return res.json({ success: true, message: 'Session deleted successfully. Ready for new QR scan or pairing code.' })
+    return res.json({ success: true, message: 'Session deleted completely. Bot is starting afresh.' })
   } catch (err) {
     console.error('[SESSION RESET ERROR]', err?.message || err)
     return res.status(500).json({ success: false, error: err?.message || 'Failed to reset session' })
   }
-})
+};
+
+httpApp.all('/reset-session', handleResetSession);
+httpApp.all('/api/reset-session', handleResetSession);
+httpApp.all('/delete-session', handleResetSession);
 
 httpApp.get('*', (req, res) => {
   res.setHeader('Content-Type', 'text/html')
@@ -301,18 +513,20 @@ httpApp.get('*', (req, res) => {
   <title>Cheems Bot MD - Authentication & Dashboard</title>
   <style>
     body { background: #0d1117; color: #e6edf3; font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
-    .card { background: #161b22; padding: 28px 36px; border-radius: 12px; border: 1px solid #30363d; text-align: center; max-width: 650px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .card { background: #161b22; padding: 28px 36px; border-radius: 12px; border: 1px solid #30363d; text-align: center; max-width: 680px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
     h1 { color: #3fb950; margin: 0 0 12px 0; font-size: 22px; }
     p { color: #8b949e; font-size: 14px; line-height: 1.4; margin: 6px 0; }
-    .tab-btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; margin: 4px; }
+    .tab-btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; margin: 3px; transition: 0.15s; }
+    .tab-btn:hover { background: #30363d; }
     .tab-btn.active { background: #238636; border-color: #2e9e44; color: #fff; }
     .qr-container { margin: 16px 0; padding: 14px; background: #ffffff; border-radius: 10px; display: inline-block; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
     .qr-container img { display: block; width: 280px; height: 280px; margin: 0 auto; border: none; }
     .status { font-weight: 600; font-size: 15px; margin-top: 10px; }
-    .badge { display: inline-block; background: #238636; color: #fff; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; margin-top: 14px; }
+    .badge { display: inline-block; background: #238636; color: #fff; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
     .pair-box { margin-top: 16px; text-align: left; }
     .pair-input { width: 100%; padding: 10px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #fff; font-size: 14px; box-sizing: border-box; margin-bottom: 10px; }
-    .pair-btn { width: 100%; padding: 10px; background: #238636; color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 14px; }
+    .pair-btn { width: 100%; padding: 10px; background: #238636; color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 14px; transition: 0.15s; }
+    .pair-btn:hover { opacity: 0.9; }
     .code-display { background: #0d1117; border: 1px solid #238636; color: #3fb950; font-family: monospace; font-size: 24px; font-weight: bold; letter-spacing: 2px; padding: 12px; border-radius: 6px; text-align: center; margin-top: 12px; }
     
     /* Logs Panel styling */
@@ -330,10 +544,12 @@ httpApp.get('*', (req, res) => {
     <h1>🤖 Cheems Bot MD</h1>
     <div id="statusText" class="status">Connecting...</div>
 
-    <div style="margin-top: 14px;">
+    <div style="margin-top: 14px; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px;">
       <button id="tabQrBtn" class="tab-btn active" onclick="switchTab('qr')">QR Scan</button>
       <button id="tabPairBtn" class="tab-btn" onclick="switchTab('pair')">Pairing Code</button>
-      <button id="tabLogsBtn" class="tab-btn" onclick="switchTab('logs')">Live Logs Dashboard</button>
+      <button id="tabSessionBtn" class="tab-btn" onclick="switchTab('session')">📂 Import Session</button>
+      <button id="tabThemeBtn" class="tab-btn" onclick="switchTab('theme')">🖼️ Replace Cheemspic</button>
+      <button id="tabLogsBtn" class="tab-btn" onclick="switchTab('logs')">Live Logs</button>
     </div>
 
     <!-- QR Section -->
@@ -354,6 +570,62 @@ httpApp.get('*', (req, res) => {
       </div>
     </div>
 
+    <!-- Import Session Section -->
+    <div id="sessionSection" style="display: none;">
+      <div style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 18px; text-align: left; margin-top: 14px;">
+        <h3 style="color: #58a6ff; margin: 0 0 6px 0; font-size: 16px;">📂 Import Session Directly</h3>
+        <p style="font-size: 13px; color: #8b949e; margin-bottom: 14px;">
+          Import your session directly into the bot folder without scanning. Upload a <code>creds.json</code> file, a <code>session.zip</code> archive, or paste the raw JSON below.
+        </p>
+
+        <!-- Method 1: File Upload -->
+        <div style="border: 1px dashed #30363d; border-radius: 8px; padding: 14px; text-align: center; background: #0d1117; margin-bottom: 14px;">
+          <p style="margin: 0 0 8px 0; font-size: 13px; font-weight: 600; color: #c9d1d9;">Option 1: Upload <code>creds.json</code> or <code>session.zip</code></p>
+          <input type="file" id="sessionFileInput" accept=".json,.zip" style="display: none;" onchange="handleSessionFileSelected(event)" />
+          <button onclick="document.getElementById('sessionFileInput').click()" class="tab-btn" style="background: #238636; border-color: #2ea043; color: white; padding: 8px 18px; font-weight: 600;">📁 Select Single File (.json / .zip)</button>
+          <div id="sessionFileStatus" style="margin-top: 8px; font-size: 12px; color: #58a6ff;"></div>
+        </div>
+
+        <!-- Method 2: Entire Folder Upload -->
+        <div style="border: 1px dashed #30363d; border-radius: 8px; padding: 14px; text-align: center; background: #0d1117; margin-bottom: 14px;">
+          <p style="margin: 0 0 8px 0; font-size: 13px; font-weight: 600; color: #c9d1d9;">Option 2: Upload Entire <code>session</code> Folder</p>
+          <input type="file" id="sessionFolderInput" webkitdirectory directory multiple style="display: none;" onchange="handleSessionFolderSelected(event)" />
+          <button onclick="document.getElementById('sessionFolderInput').click()" class="tab-btn" style="background: #1f6feb; border-color: #388bfd; color: white; padding: 8px 18px; font-weight: 600;">📂 Select Entire Session Folder</button>
+          <div id="sessionFolderStatus" style="margin-top: 8px; font-size: 12px; color: #58a6ff;"></div>
+        </div>
+
+        <!-- Method 3: Paste JSON -->
+        <div style="margin-bottom: 14px;">
+          <p style="margin: 0 0 6px 0; font-size: 13px; font-weight: 600; color: #c9d1d9;">Option 3: Paste Raw <code>creds.json</code> Content / Session String</p>
+          <textarea id="sessionJsonInput" style="width: 100%; height: 110px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #7ee787; font-family: monospace; font-size: 12px; padding: 10px; box-sizing: border-box; resize: vertical;" placeholder='{"noiseKey": {"private": ...}, "me": {"id": ...}}'></textarea>
+          <button onclick="submitPastedSession()" class="pair-btn" style="margin-top: 8px; background: #238636;">💾 Save &amp; Connect Session</button>
+          <div id="sessionPasteStatus" style="margin-top: 8px; font-size: 12px;"></div>
+        </div>
+
+        <div style="border-top: 1px solid #30363d; padding-top: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+          <span style="font-size: 12px; color: #8b949e;">Want a fresh start?</span>
+          <button onclick="resetSession()" style="background: rgba(248, 81, 73, 0.15); border: 1px solid rgba(248, 81, 73, 0.4); color: #f85149; font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 6px; cursor: pointer;">🗑️ Wipe Session &amp; Start Afresh</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Theme Banner (Cheemspic) Section -->
+    <div id="themeSection" style="display: none;">
+      <div style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; text-align: center; margin-top: 14px;">
+        <h3 style="color: #3fb950; margin: 0 0 6px 0; font-size: 16px;">🖼️ Replace Cheemspic (Bot Banner)</h3>
+        <p style="font-size: 13px; color: #8b949e; margin-bottom: 12px;">Current banner (<code>XeonMedia/theme/cheemspic.jpg</code>):</p>
+        <div style="border-radius: 8px; overflow: hidden; border: 1px solid #30363d; display: inline-block; max-width: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
+          <img id="currentBannerImg" src="/cheemspic.jpg" alt="Bot Banner" style="max-width: 100%; max-height: 220px; display: block; object-fit: contain; margin: 0 auto;" />
+        </div>
+        <div style="margin-top: 14px;">
+          <input type="file" id="bannerFileInput" accept="image/*" style="display: none;" onchange="handleBannerSelected(event)" />
+          <button onclick="document.getElementById('bannerFileInput').click()" class="tab-btn" style="background: #238636; border-color: #2ea043; color: white; padding: 9px 18px; font-weight: 600;">📁 Upload New Cheemspic Image</button>
+          <div id="uploadStatusMsg" style="margin-top: 8px; font-size: 12px; color: #58a6ff;"></div>
+        </div>
+        <p style="font-size: 11px; color: #8b949e; margin-top: 12px;">💡 <em>You can also send or reply to any photo on WhatsApp with <b>.setthumb</b> or <b>.setcheemspic</b></em></p>
+      </div>
+    </div>
+
     <!-- Live Logs Section -->
     <div id="logsSection" style="display: none;">
       <div class="logs-panel">
@@ -365,24 +637,25 @@ httpApp.get('*', (req, res) => {
       </div>
     </div>
 
-    <div style="margin-top: 18px; display: flex; justify-content: center; gap: 10px; align-items: center;">
+    <div style="margin-top: 18px; display: flex; justify-content: center; gap: 10px; align-items: center; flex-wrap: wrap;">
       <div class="badge">BOT ACTIVE</div>
-      <button onclick="resetSession()" style="background: rgba(248, 81, 73, 0.15); border: 1px solid rgba(248, 81, 73, 0.4); color: #f85149; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; cursor: pointer; transition: 0.2s;" onmouseover="this.style.background='rgba(248, 81, 73, 0.3)'" onmouseout="this.style.background='rgba(248, 81, 73, 0.15)'">🗑️ Delete / Reset Session</button>
+      <button onclick="resetSession()" style="background: rgba(248, 81, 73, 0.15); border: 1px solid rgba(248, 81, 73, 0.4); color: #f85149; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; cursor: pointer; transition: 0.2s;" onmouseover="this.style.background='rgba(248, 81, 73, 0.3)'" onmouseout="this.style.background='rgba(248, 81, 73, 0.15)'">🗑️ Wipe Session &amp; Start Afresh</button>
     </div>
   </div>
 
   <script>
     let lastLogCount = 0;
+
     async function resetSession() {
-      if (!confirm('Delete current session and generate a fresh QR code / pairing code?')) return;
+      if (!confirm('Are you sure you want to completely delete the session folder and start afresh?')) return;
       const statusEl = document.getElementById('statusText');
-      statusEl.innerText = 'Wiping session and restarting...';
+      statusEl.innerText = 'Deleting session and restarting...';
       statusEl.style.color = '#f85149';
       try {
         const res = await fetch('/reset-session', { method: 'POST' });
         const data = await res.json();
         if (data.success) {
-          statusEl.innerText = 'Session deleted! Waiting for new QR / pairing code...';
+          statusEl.innerText = 'Session wiped clean! Waiting for new QR / pairing code...';
           setTimeout(checkQR, 2000);
         } else {
           alert('Error: ' + (data.error || 'Failed to reset'));
@@ -391,17 +664,175 @@ httpApp.get('*', (req, res) => {
         alert('Network error resetting session');
       }
     }
+
     function switchTab(mode) {
       document.getElementById('tabQrBtn').classList.toggle('active', mode === 'qr');
       document.getElementById('tabPairBtn').classList.toggle('active', mode === 'pair');
+      document.getElementById('tabSessionBtn').classList.toggle('active', mode === 'session');
+      document.getElementById('tabThemeBtn').classList.toggle('active', mode === 'theme');
       document.getElementById('tabLogsBtn').classList.toggle('active', mode === 'logs');
       
       document.getElementById('qrSection').style.display = mode === 'qr' ? 'block' : 'none';
       document.getElementById('pairSection').style.display = mode === 'pair' ? 'block' : 'none';
+      document.getElementById('sessionSection').style.display = mode === 'session' ? 'block' : 'none';
+      document.getElementById('themeSection').style.display = mode === 'theme' ? 'block' : 'none';
       document.getElementById('logsSection').style.display = mode === 'logs' ? 'block' : 'none';
       
       if (mode === 'logs') {
         fetchLogs();
+      }
+    }
+
+    async function handleBannerSelected(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const statusMsg = document.getElementById('uploadStatusMsg');
+      statusMsg.innerText = 'Uploading ' + file.name + '...';
+      statusMsg.style.color = '#58a6ff';
+      
+      const reader = new FileReader();
+      reader.onload = async function(evt) {
+        try {
+          const res = await fetch('/upload-cheemspic', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: evt.target.result })
+          });
+          const json = await res.json();
+          if (json.success) {
+            statusMsg.innerText = '✅ Banner updated successfully! (cheemspic.jpg active)';
+            statusMsg.style.color = '#3fb950';
+            document.getElementById('currentBannerImg').src = '/cheemspic.jpg?t=' + Date.now();
+          } else {
+            statusMsg.innerText = '⚠️ Error: ' + (json.error || 'Upload failed');
+            statusMsg.style.color = '#f85149';
+          }
+        } catch (err) {
+          statusMsg.innerText = '⚠️ Network error uploading banner';
+          statusMsg.style.color = '#f85149';
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function handleSessionFileSelected(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const statusMsg = document.getElementById('sessionFileStatus');
+      statusMsg.innerText = 'Uploading ' + file.name + '...';
+      statusMsg.style.color = '#58a6ff';
+
+      const isJson = file.name.toLowerCase().endsWith('.json');
+      const reader = new FileReader();
+
+      reader.onload = async function(evt) {
+        try {
+          const payload = isJson 
+            ? { creds: evt.target.result, fileName: file.name }
+            : { fileName: file.name, fileData: evt.target.result };
+
+          const res = await fetch('/upload-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const json = await res.json();
+          if (json.success) {
+            statusMsg.innerText = '✅ ' + json.message;
+            statusMsg.style.color = '#3fb950';
+            setTimeout(checkQR, 2000);
+          } else {
+            statusMsg.innerText = '⚠️ Error: ' + (json.error || 'Import failed');
+            statusMsg.style.color = '#f85149';
+          }
+        } catch (err) {
+          statusMsg.innerText = '⚠️ Network error uploading session file';
+          statusMsg.style.color = '#f85149';
+        }
+      };
+
+      if (isJson) {
+        reader.readAsText(file);
+      } else {
+        reader.readAsDataURL(file);
+      }
+    }
+
+    async function handleSessionFolderSelected(e) {
+      const files = Array.from(e.target.files || []);
+      if (!files || files.length === 0) return;
+      const statusMsg = document.getElementById('sessionFolderStatus');
+      statusMsg.innerText = 'Preparing ' + files.length + ' session files...';
+      statusMsg.style.color = '#58a6ff';
+
+      try {
+        const filePromises = files.map(file => {
+          return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+              resolve({
+                name: file.name,
+                data: evt.target.result,
+                isBase64: true
+              });
+            };
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(file);
+          });
+        });
+
+        const preparedFiles = (await Promise.all(filePromises)).filter(Boolean);
+        statusMsg.innerText = 'Uploading ' + preparedFiles.length + ' files into session/ folder...';
+
+        const res = await fetch('/upload-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: preparedFiles })
+        });
+        const json = await res.json();
+        if (json.success) {
+          statusMsg.innerText = '✅ ' + json.message;
+          statusMsg.style.color = '#3fb950';
+          setTimeout(checkQR, 2000);
+        } else {
+          statusMsg.innerText = '⚠️ Error: ' + (json.error || 'Folder import failed');
+          statusMsg.style.color = '#f85149';
+        }
+      } catch (err) {
+        statusMsg.innerText = '⚠️ Network error uploading folder';
+        statusMsg.style.color = '#f85149';
+      }
+    }
+
+    async function submitPastedSession() {
+      const text = document.getElementById('sessionJsonInput').value.trim();
+      const statusMsg = document.getElementById('sessionPasteStatus');
+      if (!text) {
+        statusMsg.innerText = 'Please paste session JSON first!';
+        statusMsg.style.color = '#f85149';
+        return;
+      }
+      statusMsg.innerText = 'Saving and connecting session...';
+      statusMsg.style.color = '#58a6ff';
+
+      try {
+        const res = await fetch('/upload-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ creds: text })
+        });
+        const json = await res.json();
+        if (json.success) {
+          statusMsg.innerText = '✅ ' + json.message;
+          statusMsg.style.color = '#3fb950';
+          setTimeout(checkQR, 2000);
+        } else {
+          statusMsg.innerText = '⚠️ Error: ' + (json.error || 'Import failed');
+          statusMsg.style.color = '#f85149';
+        }
+      } catch (err) {
+        statusMsg.innerText = '⚠️ Network error importing session';
+        statusMsg.style.color = '#f85149';
       }
     }
 
@@ -432,7 +863,6 @@ httpApp.get('*', (req, res) => {
         });
         
         container.innerHTML = html;
-        // Auto-scroll to bottom of logs on new log lines
         if (logs.length !== lastLogCount) {
           container.scrollTop = container.scrollHeight;
           lastLogCount = logs.length;
@@ -529,23 +959,32 @@ async function XeonBotIncBot() {
 	if (global.reconnecting) return
 	global.reconnecting = true
 	const authDir = path.join(__dirname, global.sessionName || 'session')
-	global.authDir = authDir
 	const backupCredsPath = path.join(__dirname, 'database', 'session_creds_backup.json')
-
-	// Auto-restore credentials from persistent backup if main session creds is missing or empty
+	const mainCredsPath = path.join(authDir, 'creds.json')
+	global.authDir = authDir
 	try {
 		if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true })
-		const mainCredsPath = path.join(authDir, 'creds.json')
-		if ((!fs.existsSync(mainCredsPath) || fs.statSync(mainCredsPath).size === 0) && fs.existsSync(backupCredsPath)) {
-			console.log(color('[Session Restore] Restoring credentials from persistent backup...', 'cyan'))
-			fs.copyFileSync(backupCredsPath, mainCredsPath)
+	} catch (e) {}
+
+	// Auto-restore creds.json from backup if missing or empty
+	try {
+		const isCredsMissing = !fs.existsSync(mainCredsPath) || fs.statSync(mainCredsPath).size < 10
+		if (isCredsMissing && fs.existsSync(backupCredsPath) && fs.statSync(backupCredsPath).size > 10) {
+			const bData = fs.readFileSync(backupCredsPath, 'utf8')
+			try {
+				const bParsed = JSON.parse(bData)
+				if (bParsed.noiseKey || bParsed.signedIdentityKey || bParsed.registrationId || bParsed.me) {
+					console.log(color('\n[SESSION AUTO-RESTORE] Restoring creds.json from persistent backup!\n', 'green'))
+					fs.writeFileSync(mainCredsPath, bData)
+				}
+			} catch (_) {}
 		}
 	} catch (e) {
-		console.log('[Session Backup Restore Error]', e?.message || e)
+		console.log('[SESSION AUTO-RESTORE ERROR]', e?.message || e)
 	}
 
 	try {
-		repairSessionFolder(authDir, { prunePreKeys: true })
+		repairSessionFolder(authDir, { prunePreKeys: false })
 	} catch (e) {
 		console.log('[Session Init Cleaner]', e?.message || e)
 	}
@@ -703,12 +1142,15 @@ try{
 			pairingCodeRequested = false
 			let reason = new Boom(lastDisconnect?.error)?.output.statusCode
 			if (reason === DisconnectReason.badSession) {
-				console.log(`Bad Session File, Purging and Starting Fresh...`);
-				botStatus = 'Bad Session File'
+				console.log(`[Session Manager] Transient session desync detected. Clearing ephemeral keystore cache while preserving credentials...`);
+				botStatus = 'Session desync, recovering...'
 				try {
-					fs.rmSync(authDir, { recursive: true, force: true })
-					fs.mkdirSync(authDir, { recursive: true })
-					if (fs.existsSync(backupCredsPath)) fs.unlinkSync(backupCredsPath)
+					const files = fs.readdirSync(authDir)
+					for (const f of files) {
+						if (f !== 'creds.json') {
+							try { fs.unlinkSync(path.join(authDir, f)) } catch (_) {}
+						}
+					}
 				} catch (e) {}
 			} else if (reason === DisconnectReason.connectionClosed) {
 				console.log("Connection closed, reconnecting....");
@@ -721,12 +1163,11 @@ try{
 				botStatus = 'Session Replaced'
 				// Preserve authDir and backups on replacement, do not wipe!
 			} else if (reason === DisconnectReason.loggedOut) {
-				console.log(`Device Logged Out, Purging Session and Restarting...`);
-				botStatus = 'Device Logged Out'
+				console.log(`[Session Manager] Device Logged Out by WhatsApp. Waiting for re-login or fresh session...`);
+				botStatus = 'Device Logged Out. Please scan QR or import new session.'
 				try {
 					fs.rmSync(authDir, { recursive: true, force: true })
 					fs.mkdirSync(authDir, { recursive: true })
-					if (fs.existsSync(backupCredsPath)) fs.unlinkSync(backupCredsPath)
 				} catch (e) {}
 				global.reconnecting = false
 				// Let it fall through to restart sequence

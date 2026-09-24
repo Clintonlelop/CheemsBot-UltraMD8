@@ -2,6 +2,10 @@ const chalk = require("chalk")
 const fs = require("fs")
 const path = require("path")
 
+// Timezone configuration (Africa/Lagos - WAT, UTC+1)
+process.env.TZ = process.env.TZ || 'Africa/Lagos'
+global.timezone = process.env.TIMEZONE || 'Africa/Lagos'
+
 //auto presence update
 global.autoReading = false //auto recording (true to on, false to off)
 global.autoTyping = true //auto typing (true to on, false to off)
