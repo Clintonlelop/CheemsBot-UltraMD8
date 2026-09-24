@@ -21,10 +21,19 @@ const store = makeInMemoryStore({ logger: pino().child({ level: 'silent', stream
 if (global.conns instanceof Array) console.log()
 else global.conns = []
 
-const rentfromxeon = async (XeonBotInc, m, from) => {
-const { sendImage, sendMessage } = XeonBotInc;
+const rentfromxeon = async (mainBotSocket, m, from) => {
+const { sendImage, sendMessage } = mainBotSocket;
 const { reply, sender } = m;
-const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, `./database/rentbot/${sender.split("@")[0]}`), log({ level: "silent" }));
+if (!global.rentBotState) {
+    global.rentBotState = {}
+}
+const userSessionKey = sender.split("@")[0]
+global.rentBotState[userSessionKey] = {
+    qrCount: 0,
+    lastMsgKey: null,
+    isActive: true
+}
+const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, `./database/rentbot/${userSessionKey}`), log({ level: "silent" }));
 try {
 async function start() {
 let { version, isLatest } = await fetchLatestBaileysVersion();
@@ -99,16 +108,54 @@ if (connection){
 if (connection != "connecting") console.log("Connecting to rent bot..")
 }
 console.log(up)
-if (up.qr) await sendImage(from, await qrcode.toDataURL(up.qr,{scale : 8}), 'Scan this QR to become a temporary bot\n\n1. Click the three dots in the top right corner\n2. Tap Link Devices\n3. Scan this QR \nQR Expired in 30 seconds', m)
+if (up.qr) {
+    const userState = global.rentBotState && global.rentBotState[userSessionKey]
+    if (!userState || !userState.isActive) {
+        try { XeonBotInc.end(); } catch(_) {}
+        try { XeonBotInc.ws.close(); } catch(_) {}
+        return;
+    }
+    userState.qrCount++
+    const caption = `⚔️『 𝘾𝙇𝙄𝙉𝙏𝙊𝙉 𝘽𝙊𝙏 𝙈𝘿8 𝙍𝙀𝙉𝙏 』⚔️\n\n` +
+                    `📌 *Attempt:* #${userState.qrCount}\n` +
+                    `⏳ *Status:* Scan this QR to link your account as a temporary bot.\n\n` +
+                    `1. Open WhatsApp on your phone\n` +
+                    `2. Tap Menu / Settings ➔ Linked Devices\n` +
+                    `3. Tap *Link a Device* and scan this QR code\n\n` +
+                    `⏰ _This QR will expire in 30 seconds._\n` +
+                    `───────────────────────────\n` +
+                    `⚡ 𝙇𝙀𝙇𝙊𝙋 ⚡`
+
+    if (userState.lastMsgKey) {
+        try {
+            await mainBotSocket.sendMessage(from, { delete: userState.lastMsgKey })
+        } catch (_) {}
+    }
+    try {
+        const qrBuffer = await qrcode.toDataURL(up.qr, { scale: 8 })
+        const sentMsg = await sendImage(from, qrBuffer, caption, m)
+        if (sentMsg && sentMsg.key) {
+            userState.lastMsgKey = sentMsg.key
+        }
+    } catch (e) {
+        console.log("Error sending QR:", e.message)
+    }
+}
 console.log(connection)
 if (connection == "open") {
-XeonBotInc.id = XeonBotInc.decodeJid(XeonBotInc.user.id)
-XeonBotInc.time = Date.now()
-global.conns.push(XeonBotInc)
-await m.reply(`*Connected to ${botname}*\n\n*User :*\n _*× id : ${XeonBotInc.decodeJid(XeonBotInc.user.id)}*_`)
-user = `${XeonBotInc.decodeJid(XeonBotInc.user.id)}`
-txt = `*Detected using rent bot*\n\n _× User : @${user.split("@")[0]}_`
-sendMessage(`916909137213@s.whatsapp.net`,{text: txt, mentions : [user]})
+    const userState = global.rentBotState && global.rentBotState[userSessionKey]
+    if (userState && userState.lastMsgKey) {
+        try {
+            await mainBotSocket.sendMessage(from, { delete: userState.lastMsgKey })
+        } catch (_) {}
+    }
+    XeonBotInc.id = XeonBotInc.decodeJid(XeonBotInc.user.id)
+    XeonBotInc.time = Date.now()
+    global.conns.push(XeonBotInc)
+    await m.reply(`*Connected to ${botname}*\n\n*User :*\n _*× id : ${XeonBotInc.decodeJid(XeonBotInc.user.id)}*_`)
+    user = `${XeonBotInc.decodeJid(XeonBotInc.user.id)}`
+    txt = `*Detected using rent bot*\n\n _× User : @${user.split("@")[0]}_`
+    sendMessage(`916909137213@s.whatsapp.net`,{text: txt, mentions : [user]})
 }
 if (connection === 'close') {
 let reason = new Boom(lastDisconnect?.error)?.output.statusCode

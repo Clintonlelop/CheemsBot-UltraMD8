@@ -1417,46 +1417,33 @@ exports.apkmody = (query) => {
 			.catch(reject)
 	})
 }
-exports.happymod = (query) => {
-	return new Promise((resolve, reject) => {
-		axios.get('https://www.happymod.com/search.html?q=' + query)
-			.then(({
-				data
-			}) => {
-				const $ = cheerio.load(data)
-				const nama = [];
-				const link = [];
-				const rating = [];
-				const thumb = [];
-				const format = [];
-				$('body > div.container-row.clearfix.container-wrap > div.container-left > section > div > div > h3 > a').each(function(a, b) {
-					nem = $(b).text();
-					nama.push(nem)
-					link.push('https://happymod.com' + $(b).attr('href'))
-				})
-				$('body > div.container-row.clearfix.container-wrap > div.container-left > section > div > div > div.clearfix > span').each(function(c, d) {
-					rat = $(d).text();
-					rating.push(rat)
-				})
-				$('body > div.container-row.clearfix.container-wrap > div.container-left > section > div > a > img').each(function(e, f) {
-					thumb.push($(f).attr('data-original'))
-				})
-				for (let i = 0; i < link.length; i++) {
-					format.push({
-						title: nama[i],
-						thumb: thumb[i],
-						rating: rating[i],
-						link: link[i]
-					})
-				}
-				const result = {
-					creator: 'DGXeon',
-					data: format
-				}
-				resolve(result)
-			})
-			.catch(reject)
-	})
+exports.happymod = async (query) => {
+	try {
+		const cleanQ = String(query || '').trim();
+		let res = await axios.get('https://ws75.aptoide.com/api/7/apps/search?query=' + encodeURIComponent(cleanQ + ' mod') + '&limit=12', { timeout: 10000 });
+		let list = res.data?.datalist?.list || [];
+		if (list.length === 0) {
+			res = await axios.get('https://ws75.aptoide.com/api/7/apps/search?query=' + encodeURIComponent(cleanQ) + '&limit=12', { timeout: 10000 });
+			list = res.data?.datalist?.list || [];
+		}
+		// Filter out Aptoide launcher store itself so users get the requested app
+		list = list.filter(item => item.package !== 'cm.aptoide.pt' && item.name?.toLowerCase() !== 'aptoide');
+		const format = list.map((item, idx) => ({
+			index: idx + 1,
+			id: item.id,
+			title: item.name || 'Mod App',
+			package: item.package,
+			thumb: item.icon || item.graphic || 'https://via.placeholder.com/150',
+			rating: item.stats?.rating?.avg ? `${item.stats.rating.avg.toFixed(1)}★` : '4.5★',
+			link: `https://${item.package}.en.aptoide.com/app`,
+			downloadUrl: item.file?.path || item.file?.path_alt,
+			version: item.file?.vername || item.version?.name || 'Latest',
+			size: item.file?.filesize ? `${(item.file.filesize / (1024 * 1024)).toFixed(1)} MB` : 'Unknown'
+		}));
+		return { creator: 'DGXeon', data: format };
+	} catch (e) {
+		return { creator: 'DGXeon', data: [] };
+	}
 }
 exports.nickff = (userId) => {
 if (!userId) return new Error("no userId")

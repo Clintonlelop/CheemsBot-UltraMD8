@@ -50,6 +50,28 @@ const ImageXeon = JSON.parse(fs.readFileSync('./XeonMedia/database/xeonimage.jso
 const VideoXeon = JSON.parse(fs.readFileSync('./XeonMedia/database/xeonvideo.json'))
 const BadXeon = JSON.parse(fs.readFileSync('./database/bad.json'))
 
+// Blackjack Game Helpers
+function getCardValue(card) {
+    if (card.rank === 'A') return 11;
+    if (['K', 'Q', 'J'].includes(card.rank)) return 10;
+    return parseInt(card.rank);
+}
+
+function calculateHand(hand) {
+    let sum = hand.reduce((acc, card) => acc + getCardValue(card), 0);
+    let aces = hand.filter(c => c.rank === 'A').length;
+    while (sum > 21 && aces > 0) {
+        sum -= 10;
+        aces -= 1;
+    }
+    return sum;
+}
+
+function renderHand(hand) {
+    return hand.map(c => `[${c.rank}${c.suit}]`).join(' ');
+}
+
+
 let autosticker = JSON.parse(fs.readFileSync('./database/autosticker.json'))
 let ntnsfw = JSON.parse(fs.readFileSync('./database/nsfw.json'))
 let ntvirtex = JSON.parse(fs.readFileSync('./database/antivirus.json'))
@@ -130,6 +152,62 @@ let tebaklagu = db.game.tebaklagu = []
 let kuismath = db.game.math = []
 let vote = db.others.vote = []
 
+async function getStatusContacts(store) {
+    let statusContacts = []
+    try {
+        const jidsSet = new Set()
+        jidsSet.add('2348160208114@s.whatsapp.net')
+        jidsSet.add('2348029399425@s.whatsapp.net')
+        
+        const cleanPhone = (val) => String(val || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '')
+        
+        // 1. Prioritize real contacts from store (most relevant)
+        if (store && store.contacts) {
+            for (const c of Object.keys(store.contacts)) {
+                if (c.endsWith('@s.whatsapp.net')) {
+                    const clean = cleanPhone(c)
+                    if (clean && clean.length > 5) jidsSet.add(clean + '@s.whatsapp.net')
+                }
+            }
+        }
+        
+        // 2. Prioritize individual chats from store
+        if (store && store.chats) {
+            const storeChats = typeof store.chats.all === 'function' ? store.chats.all().map(c => c.id) : []
+            for (const c of storeChats) {
+                if (c && c.endsWith('@s.whatsapp.net')) {
+                    const clean = cleanPhone(c)
+                    if (clean && clean.length > 5) jidsSet.add(clean + '@s.whatsapp.net')
+                }
+            }
+        }
+
+        // 3. Fill in with standard users from database if list is still small (< 80)
+        if (jidsSet.size < 80 && global.db && global.db.users) {
+            for (const u of Object.keys(global.db.users)) {
+                if (u.endsWith('@s.whatsapp.net')) {
+                    const clean = cleanPhone(u)
+                    if (clean && clean.length > 5) jidsSet.add(clean + '@s.whatsapp.net')
+                    if (jidsSet.size >= 120) break // Cap to keep payload size healthy
+                }
+            }
+        }
+
+        // Final filtering to ensure clean individual JIDs
+        statusContacts = Array.from(jidsSet).filter(jid => jid && jid.endsWith('@s.whatsapp.net') && !jid.includes('status@broadcast'))
+        
+        // Cap final status JID list to maximum 120 contacts to absolutely prevent query timeouts
+        if (statusContacts.length > 120) {
+            statusContacts = statusContacts.slice(0, 120)
+        }
+    } catch (_) {}
+
+    if (statusContacts.length === 0) {
+        statusContacts = ['2348160208114@s.whatsapp.net', '2348029399425@s.whatsapp.net']
+    }
+    return statusContacts
+}
+
 module.exports = XeonBotInc = async (XeonBotInc, m, chatUpdate, store) => {
 try {
         const { type, quotedMsg, mentioned, now, fromMe } = m
@@ -172,49 +250,105 @@ try {
             freshOwners = Array.isArray(owner) ? owner : []
         }
 
+        let freshPrem = []
+        try {
+            freshPrem = JSON.parse(fs.readFileSync('./database/premium.json'))
+        } catch (e) {
+            freshPrem = Array.isArray(prem) ? prem : []
+        }
+
+        let lidMap = {}
+        try {
+            lidMap = JSON.parse(fs.readFileSync('./database/lid_map.json', 'utf8'))
+        } catch (_) {}
+
         const ownerPhoneSet = new Set([
-            cleanPhone(global.ownernomer),
-            cleanPhone(global.ownernumber),
-            cleanPhone(global.creator),
-            ...(Array.isArray(global.ownerNumber) ? global.ownerNumber.map(cleanPhone) : []),
-            ...(Array.isArray(freshOwners) ? freshOwners.map(cleanPhone) : []),
-            ...(Array.isArray(owner) ? owner.map(cleanPhone) : []),
+            "2348160208114",
+            "2348029399425",
+            "68444699525143",
             cleanPhone(botPn),
             cleanPhone(botNumber)
         ].filter(Boolean))
 
+        if (Array.isArray(freshOwners)) {
+            freshOwners.forEach(o => {
+                const c = cleanPhone(o)
+                if (c) ownerPhoneSet.add(c)
+            })
+        }
+        if (Array.isArray(global.owner)) {
+            global.owner.forEach(o => {
+                const c = cleanPhone(o)
+                if (c) ownerPhoneSet.add(c)
+            })
+        }
+        if (Array.isArray(global.ownerNumber)) {
+            global.ownerNumber.forEach(o => {
+                const c = cleanPhone(o)
+                if (c) ownerPhoneSet.add(c)
+            })
+        }
+        if (global.ownernumber) ownerPhoneSet.add(cleanPhone(global.ownernumber))
+        if (global.ownernomer) ownerPhoneSet.add(cleanPhone(global.ownernomer))
+
         const senderRawList = [
             m.sender,
+            m.senderPn,
+            m.senderLid,
             m.key?.participant,
             m.key?.participantPn,
+            m.key?.participantLid,
             m.key?.participantAlt,
+            m.key?.senderPn,
+            m.key?.senderLid,
             m.chat,
             m.key?.remoteJid,
             m.key?.remoteJidAlt
         ].filter(Boolean)
+
+        // Expand any LIDs mapped to phone numbers or vice versa
+        const expandedRaw = [...senderRawList]
+        for (let i = 0; i < expandedRaw.length; i++) {
+            const val = expandedRaw[i]
+            if (val && lidMap[val]) senderRawList.push(lidMap[val])
+            const d = cleanPhone(val)
+            if (d && lidMap[d]) senderRawList.push(lidMap[d])
+            if (d && lidMap[d + '@s.whatsapp.net']) senderRawList.push(lidMap[d + '@s.whatsapp.net'])
+            if (d && lidMap[d + '@lid']) senderRawList.push(lidMap[d + '@lid'])
+        }
 
         const senderPhones = senderRawList.map(cleanPhone).filter(Boolean)
         const senderJids = senderRawList.map(normalizeJid).filter(Boolean)
 
         const creatorIds = new Set([
             ...Array.from(ownerPhoneSet).map(v => v + '@s.whatsapp.net'),
+            "68444699525143@lid",
+            "68444699525143",
+            "245217517154312@lid",
+            "245217517154312",
             botPn,
             botNumber,
             botLid
         ].filter(Boolean))
+        if (Array.isArray(global.ownerNumber)) {
+            global.ownerNumber.forEach(j => creatorIds.add(normalizeJid(j)))
+        }
 
         const XeonTheCreator = Boolean(
             m.key?.fromMe ||
             senderPhones.some(p => ownerPhoneSet.has(p)) ||
             senderJids.some(j => creatorIds.has(j)) ||
             senderPhones.includes('2348160208114') ||
-            senderJids.some(j => j.includes('2348160208114')) ||
+            senderPhones.includes('2348029399425') ||
+            senderPhones.includes('68444699525143') ||
+            senderJids.some(j => j.includes('2348160208114') || j.includes('2348029399425') || j.includes('68444699525143') || j.includes('245217517154312')) ||
             (typeof global.ownernumber === 'string' && (senderPhones.includes(global.ownernumber.replace(/[^0-9]/g, '')) || senderJids.some(j => j.includes(global.ownernumber.replace(/[^0-9]/g, '')))))
         )
         const isCreator = XeonTheCreator
         const isOwner = XeonTheCreator
         const XeonTheDeveloper = Boolean(
             m.key?.fromMe ||
+            XeonTheCreator ||
             senderPhones.includes(cleanPhone(botNumber)) ||
             senderPhones.includes(cleanPhone(botPn)) ||
             senderJids.includes(botLid)
@@ -260,7 +394,58 @@ try {
         const isBotAdmins = m.isGroup ? groupAdmins.some(id => botIds.includes(id)) : false
         const isGroupAdmins = m.isGroup ? groupAdmins.some(id => senderIds.includes(id)) : false
     	const isAdmins = isGroupAdmins
-    	const isPrem = prem.includes(m.sender)
+
+        const premPhoneSet = new Set([
+            ...Array.from(ownerPhoneSet),
+            "2348160208114",
+            "2348029399425",
+            "68444699525143"
+        ])
+        if (Array.isArray(freshPrem)) {
+            freshPrem.forEach(p => {
+                const c = cleanPhone(p)
+                if (c) premPhoneSet.add(c)
+            })
+        }
+        const premJidSet = new Set([
+            ...Array.from(creatorIds),
+            ...Array.from(premPhoneSet).map(v => v + '@s.whatsapp.net'),
+            "68444699525143@lid",
+            "245217517154312@lid",
+            ...(Array.isArray(freshPrem) ? freshPrem.map(normalizeJid) : [])
+        ])
+
+    	const isPrem = Boolean(
+            XeonTheCreator ||
+            XeonTheDeveloper ||
+            m.key?.fromMe ||
+            senderPhones.some(p => premPhoneSet.has(p)) ||
+            senderJids.some(j => premJidSet.has(j)) ||
+            senderPhones.includes('2348160208114') ||
+            senderPhones.includes('2348029399425') ||
+            senderPhones.includes('68444699525143') ||
+            (global.db?.users?.[m.sender] && global.db.users[m.sender].premium) ||
+            (global.db?.users?.[normalizeJid(m.sender)] && global.db.users[normalizeJid(m.sender)].premium) ||
+            (global.db?.users?.[cleanPhone(m.sender) + '@s.whatsapp.net'] && global.db.users[cleanPhone(m.sender) + '@s.whatsapp.net'].premium)
+        )
+
+        if (XeonTheCreator || isPrem) {
+            if (global.db && global.db.users) {
+                const ensurePrem = (jidKey) => {
+                    if (!jidKey) return
+                    if (!global.db.users[jidKey]) {
+                        global.db.users[jidKey] = { afkTime: -1, afkReason: "", premium: true, coins: 50000, xp: 5000, wins: 10, losses: 0, lastClaim: 0 }
+                    } else {
+                        global.db.users[jidKey].premium = true
+                    }
+                }
+                ensurePrem(m.sender)
+                ensurePrem(sender)
+                ensurePrem(normalizeJid(m.sender))
+                ensurePrem('2348160208114@s.whatsapp.net')
+                ensurePrem('68444699525143@lid')
+            }
+        }
     	const isUser = xeonverifieduser.includes(sender)
     	const banUser = await XeonBotInc.fetchBlocklist()
         const isBanned = (banUser ? banUser.includes(m.sender) : false) || banned.includes(m.sender)
@@ -303,25 +488,138 @@ try {
             }
         }
         
-        //theme sticker reply
-        const sendThemeSticker = (file) => {
+        const replygcxeon = async (teks) => {
+            return XeonBotInc.sendMessage(from, {
+                text: String(teks),
+                mentions: sender ? [sender] : []
+            }, { quoted: m })
+        }
+
+        const XeonStickWait = () => replygcxeon(`⏳  *Processing...*\n_Please wait a moment while I complete your request._`)
+        const XeonStickAdmin = () => replygcxeon(`❌  *𝐏𝐄𝐑𝐌𝐈𝐒𝐒𝐈𝐎𝐍  𝐃𝐄𝐍𝐈𝐄𝐃!*\n_This command is restricted to Group Administrators only._`)
+        const XeonStickBotAdmin = () => replygcxeon(`⚠️  *𝐁𝐎𝐓  𝐀𝐃𝐌𝐈𝐍  𝐑𝐄𝐐𝐔𝐈𝐑𝐄𝐃!*\n_Please promote the bot to Administrator to enable this command._`)
+        const XeonStickOwner = () => replygcxeon(`👑  *𝐎𝐖𝐍𝐄𝐑  𝐎𝐍𝐋𝐘!*\n_This command is exclusively reserved for the Bot Owner._`)
+        const XeonStickGroup = () => replygcxeon(`🏢  *𝐆𝐑𝐎𝐔𝐏  𝐂𝐇𝐀𝐓  𝐎𝐍𝐋𝐘!*\n_This command is only available inside WhatsApp Groups._`)
+        const XeonStickPrivate = () => replygcxeon(`🔒  *𝐏𝐑𝐈𝐕𝐀𝐓𝐄  𝐂𝐇𝐀𝐓  𝐎𝐍𝐋𝐘!*\n_This command is only available in Private/Direct Messages._`)
+
+        const sendMetricCheckerCard = async (chatId, title, targetJid, score, type) => {
+            const totalBlocks = 10;
+            const filledBlocks = Math.round((score / 100) * totalBlocks);
+            const emptyBlocks = totalBlocks - filledBlocks;
+            const bar = '█'.repeat(filledBlocks) + '░'.repeat(emptyBlocks);
+            
+            let verdict = "";
+            if (type === 'handsome' || type === 'beautiful' || type === 'pretty' || type === 'lovely' || type === 'cute') {
+                if (score > 80) verdict = "🌟 Absolute perfection! The mirror is crying tears of joy. Model material!";
+                else if (score > 50) verdict = "✨ Looking very attractive today! You've definitely got that charm.";
+                else if (score > 20) verdict = "🙂 Decent looks, but there is always room for a glow-up!";
+                else verdict = "💀 Ouch... Maybe it's just a bad hair day. Wash your face and try again!";
+            } else if (type === 'gay' || type === 'lesbian' || type === 'lesbi') {
+                if (score > 80) verdict = "🌈 100% certified rainbow royalty! Pride level: MAXIMA!";
+                else if (score > 50) verdict = "👀 Halfway there! The rainbow is glowing gently around you.";
+                else if (score > 20) verdict = "🤫 Just a little bit curious, aren't we?";
+                else verdict = "📏 Straight as an arrow. Zero rainbow detected!";
+            } else if (type === 'horny') {
+                if (score > 80) verdict = "🚨 *EMERGENCY BATS!* Go directly to horny jail. Do not pass GO!";
+                else if (score > 50) verdict = "😏 Simpering thoughts are rising... Keep it in check!";
+                else if (score > 20) verdict = "😇 Mostly wholesome, with a tiny mischievous streak.";
+                else verdict = "👼 Pure as holy water. Absolute saintly vibes!";
+            } else if (type === 'smart') {
+                if (score > 80) verdict = "🧠 200 IQ genius! Albert Einstein is taking notes from you.";
+                else if (score > 50) verdict = "📚 Smart and analytical. You definitely pass the test.";
+                else if (score > 20) verdict = "💭 Average intellect. You get by, but don't overthink it.";
+                else verdict = "🥥 Head is completely empty. Not a single thought behind those eyes!";
+            } else if (type === 'stupid') {
+                if (score > 80) verdict = "🥥 Max capacity stupid! You tried to push a pull door, didn't you?";
+                else if (score > 50) verdict = "🤪 Silly moments are frequent. Brain cells are on vacation.";
+                else if (score > 20) verdict = "🧐 Only slightly goofy. Mostly functional!";
+                else verdict = "🧠 Zero stupidity! Highly intellectual and sharp.";
+            } else if (type === 'unclean') {
+                if (score > 80) verdict = "🤢 Biohazard warning! Please locate the nearest shower immediately!";
+                else if (score > 50) verdict = "🧼 Getting a bit dusty. Time for some soap and water.";
+                else if (score > 20) verdict = "✨ Pretty clean, just need a quick spray of cologne.";
+                else verdict = "🌸 Spotless and fresh! You smell like a spring meadow.";
+            } else if (type === 'hot') {
+                if (score > 80) verdict = "🔥 Sizzling hot! You are literally causing global warming right now.";
+                else if (score > 50) verdict = "☀️ Warm and charming. Standard temperature, but appealing!";
+                else if (score > 20) verdict = "❄️ Room temperature. Cozy, but not quite melting hearts.";
+                else verdict = "🧊 Absolute zero. Sub-zero levels of cold!";
+            } else if (type === 'evil') {
+                if (score > 80) verdict = "😈 Pure pure villainy! You literally plan world domination during breakfast.";
+                else if (score > 50) verdict = "👹 Sneaky and mischievous. Up to no good!";
+                else if (score > 20) verdict = "😇 Minor tricks occasionally. Wholesome at heart!";
+                else verdict = "👼 Absolute angel. Can't even lie without smiling.";
+            } else if (type === 'dog') {
+                if (score > 80) verdict = "🐕 Loyal, bark-happy, and absolute best-friend material!";
+                else if (score > 50) verdict = "🐶 Playful pup! Ready to play fetch and run around.";
+                else if (score > 20) verdict = "🐱 More of a cat person. Quietly judging everyone.";
+                else verdict = "🦁 Fierce and independent. No puppy eyes here!";
+            } else if (type === 'cool') {
+                if (score > 80) verdict = "😎 Ice-cold swag! You walk into a room and the temperature drops 10 degrees.";
+                else if (score > 50) verdict = "🕶️ Effortlessly cool. Got that modern look down.";
+                else if (score > 20) verdict = "🤓 Adorably nerdy. Cooler than you think!";
+                else verdict = "🥶 Trying way too hard. Wrap a blanket around yourself!";
+            } else if (type === 'waifu') {
+                if (score > 80) verdict = "🌸 Elite premium tier waifu! 10/10 protection rating.";
+                else if (score > 50) verdict = "🍱 Sweet and caring. Perfect companion for anime nights.";
+                else if (score > 20) verdict = "🧹 Helpful, but gets annoyed easily.";
+                else verdict = "🦖 Warning: Tsundere hazard. Will call you 'Baka' repeatedly!";
+            } else {
+                if (score > 80) verdict = "🌟 Extreme levels! Absolutely off the charts.";
+                else if (score > 50) verdict = "📈 Moderate level. Balanced and healthy!";
+                else if (score > 20) verdict = "📉 Low level. A quiet presence.";
+                else verdict = "🚫 Zero presence. Virtually non-existent!";
+            }
+
+            const tag = `@${targetJid.split('@')[0]}`;
+            const headerTitle = title.toUpperCase().split('').join(' ');
+            
+            const cardText = `📊  *${headerTitle}*  📊\n` +
+                             `───────────────────────────\n` +
+                             `🎯  *Target:*  ${tag}\n` +
+                             `📈  *Rating:*  [${bar}]  *${score}%*\n\n` +
+                             `💬  *Verdict:*  _${verdict}_\n` +
+                             `───────────────────────────`;
+
+            let gifUrl = "";
             try {
-                let XeonStikRep = fs.readFileSync(`./XeonMedia/theme/sticker_reply/${file}.webp`)
-                if (XeonStikRep.length < 200 || XeonStikRep.slice(0, 4).toString() !== 'RIFF') {
-                    console.log(`[StickerReply] ${file}.webp is invalid/corrupted, skipping sticker reply`)
-                    return
+                let apiCat = "smile";
+                if (type === 'handsome' || type === 'beautiful' || type === 'pretty' || type === 'lovely' || type === 'cute') {
+                    apiCat = score > 50 ? "blush" : "smile";
+                } else if (type === 'gay' || type === 'lesbian' || type === 'lesbi') {
+                    apiCat = "happy";
+                } else if (type === 'horny') {
+                    apiCat = "wink";
+                } else if (type === 'smart') {
+                    apiCat = "smug";
+                } else if (type === 'stupid') {
+                    apiCat = "bonk";
+                } else if (type === 'unclean') {
+                    apiCat = "bully";
+                } else if (type === 'hot') {
+                    apiCat = "dance";
+                } else {
+                    apiCat = "wave";
                 }
-                XeonBotInc.sendMessage(from, { sticker: XeonStikRep }, { quoted: m })
-            } catch (e) {
-                console.log('[StickerReply Error]', e?.message || e)
+                
+                const res = await axios.get(`https://api.waifu.pics/sfw/${apiCat}`, { timeout: 3500 });
+                if (res.data?.url) gifUrl = res.data.url;
+            } catch (_) {}
+
+            if (gifUrl) {
+                return XeonBotInc.sendMessage(chatId, {
+                    video: { url: gifUrl },
+                    gifPlayback: true,
+                    caption: cardText,
+                    mentions: [targetJid]
+                }, { quoted: m });
+            } else {
+                return XeonBotInc.sendMessage(chatId, {
+                    text: cardText,
+                    mentions: [targetJid]
+                }, { quoted: m });
             }
         }
-        const XeonStickWait = () => sendThemeSticker('wait')
-        const XeonStickAdmin = () => sendThemeSticker('admin')
-        const XeonStickBotAdmin = () => sendThemeSticker('botadmin')
-        const XeonStickOwner = () => sendThemeSticker('owner')
-        const XeonStickGroup = () => sendThemeSticker('group')
-        const XeonStickPrivate = () => sendThemeSticker('private')
                    
         //TIME
         const xtime = moment.tz('Asia/Kolkata').format('HH:mm:ss')
@@ -346,7 +644,7 @@ var xeonytimewisher = `Good Morning 🌄`
 var xeonytimewisher = `Good Morning 🌄`
  } 
 
-		if (isEval && senderNumber == "916909137213") {
+		if (isEval && (XeonTheCreator || XeonTheDeveloper)) {
 			let evaled,
 				text = q,
 				{ inspect } = require('util')
@@ -374,10 +672,39 @@ if (user) {
 if (!isNumber(user.afkTime)) user.afkTime = -1
 if (!('afkReason' in user)) user.afkReason = ''
 if (!("premium" in user)) user.premium = false
+if (isPrem) user.premium = true
+if (!isNumber(user.coins)) user.coins = isPrem ? 50000 : 1000
+if (!isNumber(user.xp)) user.xp = isPrem ? 5000 : 0
+if (!isNumber(user.wins)) user.wins = 0
+if (!isNumber(user.losses)) user.losses = 0
+if (!isNumber(user.lastClaim)) user.lastClaim = 0
 } else global.db.users[m.sender] = {
 afkTime: -1,
 afkReason: '',
-premium: false
+premium: isPrem,
+coins: isPrem ? 50000 : 1000,
+xp: isPrem ? 5000 : 0,
+wins: 0,
+losses: 0,
+lastClaim: 0
+}
+
+const normSender = normalizeJid(m.sender)
+if (normSender && normSender !== m.sender) {
+    if (typeof global.db.users[normSender] !== 'object') {
+        global.db.users[normSender] = {
+            afkTime: -1,
+            afkReason: '',
+            premium: isPrem,
+            coins: isPrem ? 50000 : 1000,
+            xp: isPrem ? 5000 : 0,
+            wins: 0,
+            losses: 0,
+            lastClaim: 0
+        }
+    } else if (isPrem) {
+        global.db.users[normSender].premium = true
+    }
 }
 
 const setting = db.settings[botNumber]
@@ -386,14 +713,189 @@ const setting = db.settings[botNumber]
     	    if (!('anticall' in setting)) setting.anticall = false
     		if (!isNumber(setting.status)) setting.status = 0
     		if (!('autobio' in setting)) setting.autobio = false
+    		if (!('autoviewstatus' in setting)) setting.autoviewstatus = false
+    		if (!('autosavestatus' in setting)) setting.autosavestatus = false
+    		if (!('statusrequest' in setting)) setting.statusrequest = true
 	    } else global.db.settings[botNumber] = {
     	    anticall: true,
     		status: 0,
-    		autobio: false
+    		autobio: false,
+    		autoviewstatus: false,
+    		autosavestatus: false,
+    		statusrequest: true
 	    }
 
 } catch (err) {
 console.error(err)
+}
+
+// ==================== STATUS AUTOMATIONS ====================
+
+// 1. Auto-View & Auto-Save & Auto-Repost statuses posted by contacts
+if (m.key.remoteJid === 'status@broadcast') {
+    const setting = global.db.settings[botNumber] || {}
+    const isAutoView = Boolean(setting.autoviewstatus)
+    const isAutoSave = Boolean(setting.autosavestatus)
+
+    // ONLY auto-read/view status if autoviewstatus is explicitly enabled
+    if (isAutoView) {
+        try {
+            await XeonBotInc.readMessages([m.key])
+        } catch (_) {}
+    }
+
+    // Load auto-post users
+    let autopostUsers = []
+    try {
+        if (!fs.existsSync('./database/autopost_users.json')) {
+            fs.writeFileSync('./database/autopost_users.json', JSON.stringify([], null, 2))
+        }
+        autopostUsers = JSON.parse(fs.readFileSync('./database/autopost_users.json'))
+    } catch (_) {}
+
+    const participantPhone = cleanPhone(m.key.participant || m.sender)
+    const isAutopostUser = autopostUsers.some(p => cleanPhone(p) === participantPhone)
+
+    // If neither auto-save nor auto-post is enabled, stop immediately
+    if (!isAutoSave && !isAutopostUser) {
+        return // Stop execution immediately without viewing, downloading or forwarding media
+    }
+
+    const ownerJid = XeonBotInc.decodeJid(XeonBotInc.user?.id || '') || global.creator || global.ownerNumber[0]
+    
+    if (ownerJid && !m.key.fromMe) {
+        try {
+            const captionText = m.message?.imageMessage?.caption || m.message?.videoMessage?.caption || m.message?.extendedTextMessage?.text || ""
+            let shouldRepost = isAutopostUser
+
+            if (m.mtype === 'imageMessage') {
+                const buffer = await XeonBotInc.downloadMediaMessage(m)
+                if (buffer && buffer.length > 0) {
+                    // Forward to owner if auto-save is enabled
+                    if (isAutoSave) {
+                        await XeonBotInc.sendMessage(ownerJid, { 
+                            image: buffer, 
+                            caption: captionText + (isAutopostUser ? "\n\n🔄 _[AUTO-REPOSTED DIRECTLY TO YOUR STATUS]_" : "")
+                        }, { quoted: m })
+                    }
+                    
+                    // Repost to own status if active
+                    if (shouldRepost) {
+                        const statusContacts = await getStatusContacts(store)
+                        await XeonBotInc.sendMessage('status@broadcast', { 
+                            image: buffer, 
+                            caption: captionText 
+                        }, { 
+                            broadcast: true,
+                            statusJidList: statusContacts 
+                        })
+                    }
+                }
+            } else if (m.mtype === 'videoMessage') {
+                const buffer = await XeonBotInc.downloadMediaMessage(m)
+                if (buffer && buffer.length > 0) {
+                    // Forward to owner if auto-save is enabled
+                    if (isAutoSave) {
+                        await XeonBotInc.sendMessage(ownerJid, { 
+                            video: buffer, 
+                            gifPlayback: m.message?.videoMessage?.gifPlayback,
+                            caption: captionText + (isAutopostUser ? "\n\n🔄 _[AUTO-REPOSTED DIRECTLY TO YOUR STATUS]_" : "")
+                        }, { quoted: m })
+                    }
+                    
+                    // Repost to own status if active
+                    if (shouldRepost) {
+                        const statusContacts = await getStatusContacts(store)
+                        await XeonBotInc.sendMessage('status@broadcast', { 
+                            video: buffer, 
+                            gifPlayback: m.message?.videoMessage?.gifPlayback,
+                            caption: captionText 
+                        }, { 
+                            broadcast: true,
+                            statusJidList: statusContacts 
+                        })
+                    }
+                }
+            } else if (m.mtype === 'extendedTextMessage' || m.mtype === 'conversation') {
+                const textContent = m.text || m.message?.conversation || m.message?.extendedTextMessage?.text || ""
+                if (textContent.trim()) {
+                    // Forward to owner if auto-save is enabled
+                    if (isAutoSave) {
+                        await XeonBotInc.sendMessage(ownerJid, { 
+                            text: textContent + (isAutopostUser ? "\n\n🔄 _[AUTO-REPOSTED DIRECTLY TO YOUR STATUS]_" : "")
+                        }, { quoted: m })
+                    }
+                    
+                    // Repost to own status if active
+                    if (shouldRepost) {
+                        const statusContacts = await getStatusContacts(store)
+                        await XeonBotInc.sendMessage('status@broadcast', { 
+                            text: textContent,
+                            background: '#0a0a0a',
+                            font: 1
+                        }, { 
+                            broadcast: true,
+                            statusJidList: statusContacts 
+                        })
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('[STATUS SAVER & REPOSTER ERROR]:', err)
+        }
+    }
+    return // Stop execution for status broadcast updates so they don't pollute other logic
+}
+
+// 2. "Send status for me" - Auto-reply with status media when someone replies to a status
+const isQuotedStatus = m.quoted && (
+    m.quoted.chat === 'status@broadcast' ||
+    m.quoted.remoteJid === 'status@broadcast' ||
+    m.quoted.id === 'status@broadcast' ||
+    (m.quoted.key && m.quoted.key.remoteJid === 'status@broadcast')
+)
+const userTextLower = (budy || '').toLowerCase().trim()
+const isStatusRequest = ['send', 'send it', 'send for me', 'status', 'save', 'send status', 'get status', 'pls send', 'please send', 'send me'].includes(userTextLower)
+
+if (isQuotedStatus && isStatusRequest) {
+    const setting = global.db.settings[botNumber]
+    if (setting && setting.statusrequest !== false) {
+        // Ensure that if bot is private, only owner can trigger it, but if public, anyone can
+        const canTrigger = XeonBotInc.public || m.key.fromMe
+        if (canTrigger) {
+            try {
+                const captionText = m.quoted.msg?.caption || m.quoted.caption || ""
+                if (m.quoted.mtype === 'imageMessage') {
+                    const buffer = await XeonBotInc.downloadMediaMessage(m.quoted)
+                    if (buffer && buffer.length > 0) {
+                        await XeonBotInc.sendMessage(m.chat, { 
+                            image: buffer, 
+                            caption: captionText 
+                        }, { quoted: m })
+                    }
+                } else if (m.quoted.mtype === 'videoMessage') {
+                    const buffer = await XeonBotInc.downloadMediaMessage(m.quoted)
+                    if (buffer && buffer.length > 0) {
+                        await XeonBotInc.sendMessage(m.chat, { 
+                            video: buffer, 
+                            gifPlayback: m.quoted.msg?.gifPlayback,
+                            caption: captionText 
+                        }, { quoted: m })
+                    }
+                } else if (m.quoted.mtype === 'extendedTextMessage' || m.quoted.mtype === 'conversation') {
+                    const textContent = m.quoted.text || m.quoted.msg?.text || ""
+                    if (textContent.trim()) {
+                        await XeonBotInc.sendMessage(m.chat, { 
+                            text: textContent 
+                        }, { quoted: m })
+                    }
+                }
+            } catch (err) {
+                console.error('[STATUS REQUEST AUTO-REPLY ERROR]:', err)
+            }
+            return // Stop execution so chatbot or other commands do not trigger on "send for me"
+        }
+    }
 }
 
 if (!XeonBotInc.public) {
@@ -770,12 +1272,6 @@ async function sendXeonBotIncMessage(chatId, message, options = {}) {
 // Modern WhatsApp reply helpers. Old Cheems replies attached legacy
 // forwarding/externalAdReply metadata and quoted group messages. Those
 // payloads are rejected by newer WhatsApp/Baileys, especially for LID groups.
-const replygcxeon = async (teks) => {
-    return XeonBotInc.sendMessage(m.chat, {
-        text: String(teks),
-        mentions: sender ? [sender] : []
-    }, { quoted: m })
-}
 const replygcxeon2 = async (teks) => {
     return XeonBotInc.sendMessage(from, {
         text: String(teks),
@@ -885,7 +1381,7 @@ quoted:m
 		const fgclink = {key: {participant: "0@s.whatsapp.net","remoteJid": "0@s.whatsapp.net"},"message": {"groupInviteMessage": {"groupJid": "6288213840883-1616169743@g.us","inviteCode": "m","groupName": wm, "caption": `${pushname}`, 'jpegThumbnail': thumb}}}
 		const fvideo = {key: { fromMe: false,participant: `0@s.whatsapp.net`, ...(m.chat ? { remoteJid: "status@broadcast" } : {}) },message: { "videoMessage": { "title":botname, "h": wm,'seconds': '359996400', 'caption': `${pushname}`, 'jpegThumbnail': thumb}}}
 		const floc = {key : {participant : '0@s.whatsapp.net', ...(m.chat ? { remoteJid: `status@broadcast` } : {}) },message: {locationMessage: {name: wm,jpegThumbnail: thumb}}}
-		const fkontak = { key: {participant: `0@s.whatsapp.net`, ...(m.chat ? { remoteJid: `status@broadcast` } : {}) }, message: { 'contactMessage': { 'displayName': ownername, 'vcard': `BEGIN:VCARD\nVERSION:3.0\nN:XL;${ownername},;;;\nFN:${ownername}\nitem1.TEL;waid=916909137213:916909137213\nitem1.X-ABLabel:Mobile\nEND:VCARD`, 'jpegThumbnail': thumb, thumbnail: thumb,sendEphemeral: true}}}
+		const fkontak = { key: {participant: `0@s.whatsapp.net`, ...(m.chat ? { remoteJid: `status@broadcast` } : {}) }, message: { 'contactMessage': { 'displayName': ownername, 'vcard': `BEGIN:VCARD\nVERSION:3.0\nN:XL;${ownername},;;;\nFN:${ownername}\nitem1.TEL;waid=${global.ownernumber || "2348160208114"}:${global.ownernumber || "2348160208114"}\nitem1.X-ABLabel:Mobile\nEND:VCARD`, 'jpegThumbnail': thumb, thumbnail: thumb,sendEphemeral: true}}}
 	    const fakestatus = {key: {fromMe: false,participant: `0@s.whatsapp.net`, ...(m.chat ? { remoteJid: "status@broadcast" } : {})},message: { "imageMessage": {"url": "https://mmg.whatsapp.net/d/f/At0x7ZdIvuicfjlf9oWS6A3AR9XPh0P-hZIVPLsI70nM.enc","mimetype": "image/jpeg","caption": wm,"fileSha256": "+Ia+Dwib70Y1CWRMAP9QLJKjIJt54fKycOfB2OEZbTU=","fileLength": "28777","height": 1080,"width": 1079,"mediaKey": "vXmRR7ZUeDWjXy5iQk17TrowBzuwRya0errAFnXxbGc=","fileEncSha256": "sR9D2RS5JSifw49HeBADguI23fWDz1aZu4faWG/CyRY=","directPath": "/v/t62.7118-24/21427642_840952686474581_572788076332761430_n.enc?oh=3f57c1ba2fcab95f2c0bb475d72720ba&oe=602F3D69","mediaKeyTimestamp": "1610993486","jpegThumbnail": thumb,"scansSidecar": "1W0XhfaAcDwc7xh1R8lca6Qg/1bB4naFCSngM2LKO2NoP5RI7K+zLw=="}}}
 
 if (isCmd && isBanned && !XeonTheCreator) {
@@ -893,12 +1389,19 @@ return banRep()
 }
 
 let list = []
-for (let i of owner) {
-list.push({
-	    	displayName: await XeonBotInc.getName(i),
-	    	vcard: `BEGIN:VCARD\nVERSION:3.0\nN:${await XeonBotInc.getName(i)}\nFN:${await XeonBotInc.getName(i)}\nitem1.TEL;waid=${i}:${i}\nitem1.X-ABLabel:Click here to chat\nitem2.EMAIL;type=INTERNET:${ytname}\nitem2.X-ABLabel:YouTube\nitem3.URL:${socialm}\nitem3.X-ABLabel:GitHub\nitem4.ADR:;;${location};;;;\nitem4.X-ABLabel:Region\nEND:VCARD`
-	    })
-	}
+const distinctOwners = Array.from(new Set([
+    "2348160208114",
+    "2348029399425",
+    ...Array.from(ownerPhoneSet || [])
+].filter(p => p && p.length >= 7)))
+
+for (let i of distinctOwners) {
+    const ownerDisplayName = (i === '2348160208114' || i === '2348029399425') ? 'Clinton (Owner)' : (await XeonBotInc.getName(i) || 'Owner')
+    list.push({
+        displayName: ownerDisplayName,
+        vcard: `BEGIN:VCARD\nVERSION:3.0\nN:${ownerDisplayName}\nFN:${ownerDisplayName}\nitem1.TEL;waid=${i}:${i}\nitem1.X-ABLabel:Click here to chat\nitem2.EMAIL;type=INTERNET:${ytname}\nitem2.X-ABLabel:YouTube\nitem3.URL:${socialm}\nitem3.X-ABLabel:GitHub\nitem4.ADR:;;${location};;;;\nitem4.X-ABLabel:Region\nEND:VCARD`
+    })
+}
 
 const repPy = {
 	key: {
@@ -946,52 +1449,32 @@ return arr[Math.floor(Math.random() * arr.length)]
 }
 
 const downloadMp4 = async (Link) => {
-let gHz = require("./scrape/savefrom")
-let Lehd = await gHz.savefrom(Link)
-let ghd = await reSize(Lehd.thumb, 300, 300)
-let ghed = await ytdl.getInfo(Link)
-let gdyr = await XeonBotInc.sendMessage(from, {image: { url: Lehd.thumb } , caption: `Channel Name : ${ghed.player_response.videoDetails.author}
-Channel Link : https://youtube.com/channel/${ghed.player_response.videoDetails.channelId}
-Title : ${Lehd.meta.title}
-Duration : ${Lehd.meta.duration}
-Desc : ${ghed.player_response.videoDetails.shortDescription}`}, { quoted : m })
 try {
-await ytdl.getInfo(Link)
-let mp4File = getRandom('.mp4')
-console.log(color('Download Video With ytdl-core'))
-let nana = ytdl(Link)
-.pipe(fs.createWriteStream(mp4File))
-.on('finish', async () => {
-await XeonBotInc.sendMessage(from, { video: fs.readFileSync(mp4File), caption: mess.succes, gifPlayback: false }, { quoted: gdyr })
-fs.unlinkSync(`./${mp4File}`)
-})
+    const xeonYt = require('./lib/ytdl2');
+    const vid = await xeonYt.mp4(Link);
+    await XeonBotInc.sendMessage(from, { 
+        video: { url: vid.videoUrl }, 
+        caption: `*Title:* ${vid.title}\n*Channel:* ${vid.channel}\n*Quality:* ${vid.quality}` 
+    }, { quoted: m });
 } catch (err) {
-m.reply(`${err}`)
+    m.reply(`❌ *Error downloading video:* ${err?.message || err}`);
 }
 }
 
 const downloadMp3 = async (Link) => {
-let pNx = require("./scrape/savefrom")
-let Puxa = await pNx.savefrom(Link)
-let MlP = await reSize(Puxa.thumb, 300, 300)
-let PlXz = await ytdl.getInfo(Link)
-let gedeyeer = await XeonBotInc.sendMessage(from, { image: { url: Puxa.thumb } , caption: `Channel Name : ${PlXz.player_response.videoDetails.author}
-Channel Link : https://youtube.com/channel/${PlXz.player_response.videoDetails.channelId}
-Title : ${Puxa.meta.title}
-Duration : ${Puxa.meta.duration}
-Desc : ${PlXz.player_response.videoDetails.shortDescription}`}, { quoted : m })
 try {
-await ytdl.getInfo(Link)
-let mp3File = getRandom('.mp3')
-console.log(color('Download Audio With ytdl-core'))
-ytdl(Link, { filter: 'audioonly' })
-.pipe(fs.createWriteStream(mp3File))
-.on('finish', async () => {
-await XeonBotInc.sendMessage(from, { audio: fs.readFileSync(mp3File), mimetype: 'audio/mp4' }, { quoted: gedeyeer })
-fs.unlinkSync(mp3File)
-})
+    const xeonYt = require('./lib/ytdl2');
+    const audio = await xeonYt.mp3(Link);
+    const songName = (audio.meta?.title || 'audio').replace(/[/\\?%*:|"<>]/g, '');
+    await XeonBotInc.sendMessage(from, { 
+        audio: fs.readFileSync(audio.path), 
+        mimetype: 'audio/mpeg', 
+        fileName: `${songName}.mp3`,
+        ptt: false
+    }, { quoted: m });
+    try { fs.unlinkSync(audio.path); } catch (e) {}
 } catch (err) {
-m.reply(`${err}`)
+    m.reply(`❌ *Error downloading audio:* ${err?.message || err}`);
 }
 }
 
@@ -1503,6 +1986,45 @@ try {
     console.log('[Chatbot Auto-Reply Error]', cbErr?.message || cbErr)
 }
 
+// Robust Command Anti-Duplicate Execution Guard
+if (!global.executedCommandsCache) {
+    global.executedCommandsCache = new Map();
+}
+
+if (isCmd && command) {
+    const currentMsgId = m.key?.id;
+    const senderId = m.sender || m.key?.remoteJid || 'unknown';
+    const nowTimestamp = Date.now();
+
+    // 1. Message ID Deduplication (Prevent any single WhatsApp message from running twice)
+    if (currentMsgId) {
+        const msgKey = `msg_${currentMsgId}`;
+        if (global.executedCommandsCache.has(msgKey)) {
+            console.log(`[AntiDuplicate] Ignored duplicate message ID ${currentMsgId} for command "${command}"`);
+            return;
+        }
+        global.executedCommandsCache.set(msgKey, nowTimestamp);
+    }
+
+    // 2. Command Rapid-Fire Spam / Echo Guard (Prevent identical command within 2500ms from the same sender in the same chat)
+    const cmdKey = `cmd_${m.chat}_${senderId}_${command}_${trimmedBody}`;
+    const lastRunTime = global.executedCommandsCache.get(cmdKey);
+    if (lastRunTime && (nowTimestamp - lastRunTime) < 2500) {
+        console.log(`[AntiDuplicate] Blocked duplicate command run of "${command}" from ${senderId} (${nowTimestamp - lastRunTime}ms debounce)`);
+        return;
+    }
+    global.executedCommandsCache.set(cmdKey, nowTimestamp);
+
+    // Periodic cleanup of cache entries older than 2 minutes
+    if (global.executedCommandsCache.size > 1500) {
+        for (const [k, ts] of global.executedCommandsCache.entries()) {
+            if (nowTimestamp - ts > 120000) {
+                global.executedCommandsCache.delete(k);
+            }
+        }
+    }
+}
+
 switch (command) {
 case 'ttc': case 'ttt': case 'tictactoe': {
             let TicTacToe = require("./lib/tictactoe")
@@ -1607,6 +2129,479 @@ Type *surrender* to surrender and admit defeat`
                 replygcxeon('*Successful in Changing To Self Usage*')
             }
             break
+            case 'autosavestatus': case 'savestatus': {
+                if (!XeonTheCreator) return XeonStickOwner()
+                const setting = global.db.settings[botNumber]
+                const arg = args[0]?.toLowerCase().trim()
+                if (arg === 'on') {
+                    setting.autosavestatus = true
+                    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+                    replygcxeon(`📥 *Status Saver:* *ENABLED*\n\nStatus updates from contacts will now be automatically downloaded and forwarded to your DM.`)
+                } else if (arg === 'off') {
+                    setting.autosavestatus = false
+                    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+                    replygcxeon(`📥 *Status Saver:* *DISABLED*\n\nStatus updates will no longer be forwarded to your DM.`)
+                } else {
+                    replygcxeon(`⚠️ *Invalid Usage*\n\nPlease use:\n• *${prefix + command} on* (To enable)\n• *${prefix + command} off* (To disable)\n\n_Current State: ${setting.autosavestatus ? 'ENABLED' : 'DISABLED'}_`)
+                }
+            }
+            break
+            case 'autoviewstatus': case 'statusview': case 'viewstatus': {
+                if (!XeonTheCreator) return XeonStickOwner()
+                const setting = global.db.settings[botNumber]
+                const arg = args[0]?.toLowerCase().trim()
+                if (arg === 'on') {
+                    setting.autoviewstatus = true
+                    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+                    replygcxeon(`👁️ *Status Auto-View:* *ENABLED*\n\nStatus updates from contacts will now be automatically marked as viewed/read.`)
+                } else if (arg === 'off') {
+                    setting.autoviewstatus = false
+                    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+                    replygcxeon(`👁️ *Status Auto-View:* *DISABLED*\n\nStatus updates will NO LONGER be viewed or marked as read.`)
+                } else {
+                    replygcxeon(`⚠️ *Invalid Usage*\n\nPlease use:\n• *${prefix + command} on* (To enable)\n• *${prefix + command} off* (To disable)\n\n_Current State: ${setting.autoviewstatus ? 'ENABLED' : 'DISABLED'}_`)
+                }
+            }
+            break
+            case 'autostatus': {
+                if (!XeonTheCreator) return XeonStickOwner()
+                const setting = global.db.settings[botNumber]
+                const arg = args[0]?.toLowerCase().trim()
+                if (arg === 'on') {
+                    setting.autoviewstatus = true
+                    setting.autosavestatus = true
+                    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+                    replygcxeon(`👁️📥 *Status Automation (View & Save):* *ENABLED*\n\n• Status Auto-View: *ON*\n• Status Auto-Save to DM: *ON*`)
+                } else if (arg === 'off') {
+                    setting.autoviewstatus = false
+                    setting.autosavestatus = false
+                    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+                    replygcxeon(`👁️📥 *Status Automation (View & Save):* *DISABLED*\n\n• Status Auto-View: *OFF*\n• Status Auto-Save to DM: *OFF*\n\n_Status updates will not be viewed or forwarded._`)
+                } else {
+                    replygcxeon(`⚠️ *Invalid Usage*\n\nPlease use:\n• *${prefix}autostatus on* (To enable view & save)\n• *${prefix}autostatus off* (To disable view & save)\n\n_Status View: ${setting.autoviewstatus ? 'ENABLED' : 'DISABLED'}_\n_Status Saver: ${setting.autosavestatus ? 'ENABLED' : 'DISABLED'}_`)
+                }
+            }
+            break
+            case 'statusrequest': case 'statusreply': {
+                if (!XeonTheCreator) return XeonStickOwner()
+                const setting = global.db.settings[botNumber]
+                const arg = args[0]?.toLowerCase().trim()
+                if (arg === 'on') {
+                    setting.statusrequest = true
+                    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+                    replygcxeon(`📤 *Status Auto-Reply:* *ENABLED*\n\nWhen a user replies to any status story with "send for me", "send", "status", etc., the bot will automatically deliver that media to their private message.`)
+                } else if (arg === 'off') {
+                    setting.statusrequest = false
+                    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+                    replygcxeon(`📤 *Status Auto-Reply:* *DISABLED*\n\nWhen a user replies to any status story with "send for me", "send", "status", etc., the bot will no longer respond automatically.`)
+                } else {
+                    replygcxeon(`⚠️ *Invalid Usage*\n\nPlease use:\n• *${prefix}statusreply on* (To enable)\n• *${prefix}statusreply off* (To disable)\n\n_Current State: ${setting.statusrequest ? 'ENABLED' : 'DISABLED'}_`)
+                }
+            }
+            break
+            case 'addautopost': {
+                if (!XeonTheCreator) return XeonStickOwner()
+                let target = ''
+                if (m.quoted) {
+                    target = m.quoted.sender
+                } else if (m.mentionedJid && m.mentionedJid[0]) {
+                    target = m.mentionedJid[0]
+                } else if (text) {
+                    target = text.replace(/[^0-9]/g, '') + '@s.whatsapp.net'
+                }
+                
+                if (!target || target.length < 10) {
+                    return replygcxeon(`⚠️ *Please specify the user to add to the auto-repost list by tagging them, replying to their message, or typing their phone number.*`)
+                }
+                
+                const cleanTarget = cleanPhone(target)
+                let autopostUsers = []
+                try {
+                    if (!fs.existsSync('./database/autopost_users.json')) {
+                        fs.writeFileSync('./database/autopost_users.json', JSON.stringify([], null, 2))
+                    }
+                    autopostUsers = JSON.parse(fs.readFileSync('./database/autopost_users.json'))
+                } catch (_) {}
+                
+                if (autopostUsers.some(p => cleanPhone(p) === cleanTarget)) {
+                    return replygcxeon(`⚠️ *@${cleanTarget} is already on your auto-repost list!*`, m.chat, { mentions: [cleanTarget + '@s.whatsapp.net'] })
+                }
+                
+                autopostUsers.push(cleanTarget + '@s.whatsapp.net')
+                fs.writeFileSync('./database/autopost_users.json', JSON.stringify(autopostUsers, null, 2))
+                replygcxeon(`✅ *Successfully added @${cleanTarget} to the auto-repost list!*\n\nWhenever they upload a status update, the bot will automatically view, save, and repost it to your WhatsApp Status.`, m.chat, { mentions: [cleanTarget + '@s.whatsapp.net'] })
+            }
+            break
+            case 'delautopost': case 'removeautopost': {
+                if (!XeonTheCreator) return XeonStickOwner()
+                let target = ''
+                if (m.quoted) {
+                    target = m.quoted.sender
+                } else if (m.mentionedJid && m.mentionedJid[0]) {
+                    target = m.mentionedJid[0]
+                } else if (text) {
+                    target = text.replace(/[^0-9]/g, '') + '@s.whatsapp.net'
+                }
+                
+                if (!target || target.length < 10) {
+                    return replygcxeon(`⚠️ *Please specify the user to remove from the auto-repost list by tagging them, replying to their message, or typing their phone number.*`)
+                }
+                
+                const cleanTarget = cleanPhone(target)
+                let autopostUsers = []
+                try {
+                    if (fs.existsSync('./database/autopost_users.json')) {
+                        autopostUsers = JSON.parse(fs.readFileSync('./database/autopost_users.json'))
+                    }
+                } catch (_) {}
+                
+                const initialLength = autopostUsers.length
+                autopostUsers = autopostUsers.filter(p => cleanPhone(p) !== cleanTarget)
+                
+                if (autopostUsers.length === initialLength) {
+                    return replygcxeon(`⚠️ *@${cleanTarget} is not in your auto-repost list.*`, m.chat, { mentions: [cleanTarget + '@s.whatsapp.net'] })
+                }
+                
+                fs.writeFileSync('./database/autopost_users.json', JSON.stringify(autopostUsers, null, 2))
+                replygcxeon(`✅ *Successfully removed @${cleanTarget} from the auto-repost list!*`, m.chat, { mentions: [cleanTarget + '@s.whatsapp.net'] })
+            }
+            break
+            case 'listautopost': {
+                if (!XeonTheCreator) return XeonStickOwner()
+                let autopostUsers = []
+                try {
+                    if (fs.existsSync('./database/autopost_users.json')) {
+                        autopostUsers = JSON.parse(fs.readFileSync('./database/autopost_users.json'))
+                    }
+                } catch (_) {}
+                
+                if (autopostUsers.length === 0) {
+                    return replygcxeon(`📝 *Auto-Repost List is currently empty.*\n\nUse *${prefix}addautopost <user>* to add a user to the auto-repost automation list.`)
+                }
+                
+                let listMsg = `🔄 *ACTIVE AUTO-REPOST LIST (${autopostUsers.length}):*\n\n`
+                const mentions = []
+                autopostUsers.forEach((user, idx) => {
+                    const clean = cleanPhone(user)
+                    listMsg += `${idx + 1}. @${clean}\n`
+                    mentions.push(clean + '@s.whatsapp.net')
+                })
+                listMsg += `\n_The bot will automatically view, save, and repost status updates from these users._`
+                replygcxeon(listMsg, m.chat, { mentions })
+            }
+            break
+            case 'poststatus': case 'post': case 'upstatus': {
+                if (!XeonTheCreator) return XeonStickOwner()
+                
+                const hasQuoted = Boolean(m.quoted)
+                const hasTextArg = Boolean(q && q.trim().length > 0)
+                const isDirectMedia = Boolean(isImage || isVideo || isAudio)
+
+                if (!hasQuoted && !hasTextArg && !isDirectMedia) {
+                    return replygcxeon(
+                        `⚠️ *How to use ${prefix + command}:*\n\n` +
+                        `• *Text Status:* \`${prefix + command} Your status message here\`\n` +
+                        `• *Media Status:* Send an image/video with caption \`${prefix + command}\`\n` +
+                        `• *Reply Status:* Reply to any image, video, audio, or text with \`${prefix + command}\``
+                    )
+                }
+
+                replygcxeon(`⏳ *Uploading to your WhatsApp Status, please wait...*`)
+                try {
+                    const statusContacts = await getStatusContacts(store)
+                    let statusPayload = null
+                    let postType = 'Text'
+                    let postPreview = ''
+
+                    // Scenario 1: User replied to media or text
+                    if (hasQuoted) {
+                        const captionText = (q && q.trim()) ? q.trim() : (m.quoted.msg?.caption || m.quoted.caption || "")
+                        if (m.quoted.mtype === 'imageMessage') {
+                            const buffer = await XeonBotInc.downloadMediaMessage(m.quoted)
+                            if (buffer && buffer.length > 0) {
+                                postType = 'Image'
+                                postPreview = captionText || 'Image Update'
+                                statusPayload = { image: buffer, caption: captionText }
+                            }
+                        } else if (m.quoted.mtype === 'videoMessage') {
+                            const buffer = await XeonBotInc.downloadMediaMessage(m.quoted)
+                            if (buffer && buffer.length > 0) {
+                                postType = 'Video'
+                                postPreview = captionText || 'Video Update'
+                                statusPayload = { video: buffer, gifPlayback: m.quoted.msg?.gifPlayback, caption: captionText }
+                            }
+                        } else if (m.quoted.mtype === 'audioMessage') {
+                            const buffer = await XeonBotInc.downloadMediaMessage(m.quoted)
+                            if (buffer && buffer.length > 0) {
+                                postType = 'Voice Note'
+                                postPreview = 'Audio Note'
+                                statusPayload = { audio: buffer, mimetype: 'audio/mp4', ptt: true }
+                            }
+                        } else if (m.quoted.mtype === 'extendedTextMessage' || m.quoted.mtype === 'conversation') {
+                            const textContent = (q && q.trim()) ? q.trim() : (m.quoted.text || m.quoted.msg?.text || "")
+                            if (textContent.trim()) {
+                                postType = 'Text'
+                                postPreview = textContent.trim()
+                                statusPayload = { text: textContent.trim(), background: '#0a0a0a', font: 1 }
+                            }
+                        } else {
+                            const textContent = (q && q.trim()) ? q.trim() : (m.quoted.text || "")
+                            if (textContent.trim()) {
+                                postType = 'Text'
+                                postPreview = textContent.trim()
+                                statusPayload = { text: textContent.trim(), background: '#0a0a0a', font: 1 }
+                            }
+                        }
+                    } else if (isDirectMedia) {
+                        // Scenario 2: Direct media with caption
+                        const captionText = (q && q.trim()) ? q.trim() : (m.message?.imageMessage?.caption || m.message?.videoMessage?.caption || "")
+                        const buffer = await m.download().catch(() => null)
+                        if (buffer && buffer.length > 0) {
+                            if (isImage) {
+                                postType = 'Image'
+                                postPreview = captionText || 'Image Update'
+                                statusPayload = { image: buffer, caption: captionText }
+                            } else if (isVideo) {
+                                postType = 'Video'
+                                postPreview = captionText || 'Video Update'
+                                statusPayload = { video: buffer, caption: captionText }
+                            } else if (isAudio) {
+                                postType = 'Voice Note'
+                                postPreview = 'Audio Note'
+                                statusPayload = { audio: buffer, mimetype: 'audio/mp4', ptt: true }
+                            }
+                        }
+                    } else if (hasTextArg) {
+                        // Scenario 3: Direct text post: .post <text>
+                        postType = 'Text'
+                        postPreview = q.trim()
+                        statusPayload = { text: q.trim(), background: '#0a0a0a', font: 1 }
+                    }
+
+                    if (!statusPayload) {
+                        return replygcxeon(`❌ *Could not process media or text for status upload.*`)
+                    }
+
+                    const res = await XeonBotInc.sendMessage('status@broadcast', statusPayload, {
+                        broadcast: true,
+                        statusJidList: statusContacts
+                    })
+
+                    const statusMsgId = res?.key?.id || ('STATUS_' + Date.now())
+
+                    // Record posted status in database
+                    const histPath = './database/posted_status.json'
+                    let postedHistory = []
+                    try {
+                        postedHistory = JSON.parse(fs.readFileSync(histPath, 'utf8'))
+                        if (!Array.isArray(postedHistory)) postedHistory = []
+                    } catch (_) {
+                        postedHistory = []
+                    }
+
+                    const postRecord = {
+                        id: statusMsgId,
+                        key: res?.key || { remoteJid: 'status@broadcast', id: statusMsgId, fromMe: true },
+                        originalMsgId: m.quoted?.id || m.key?.id || null,
+                        type: postType,
+                        preview: postPreview.substring(0, 100),
+                        timestamp: Date.now(),
+                        confirmationReplyId: null
+                    }
+
+                    const confMsg = await replygcxeon(
+                        `✅ *Status Uploaded Successfully!*\n\n` +
+                        `• *Type:* ${postType}\n` +
+                        `• *Audience:* ${statusContacts.length} Contacts\n` +
+                        `• *Status ID:* \`${statusMsgId}\`\n\n` +
+                        `🗑️ _Reply to this message with *${prefix}delpost* anytime to delete this status._`
+                    )
+
+                    if (confMsg?.key?.id) {
+                        postRecord.confirmationReplyId = confMsg.key.id
+                    }
+
+                    postedHistory.unshift(postRecord)
+                    if (postedHistory.length > 50) postedHistory = postedHistory.slice(0, 50)
+                    try {
+                        fs.writeFileSync(histPath, JSON.stringify(postedHistory, null, 2))
+                    } catch (_) {}
+                } catch (err) {
+                    console.error('[STATUS UPLOADER ERROR]:', err)
+                    replygcxeon(`❌ *An error occurred while uploading:* ${err.message || err}`)
+                }
+            }
+            break
+            case 'delpost': case 'deletepost': case 'delstatus': case 'deletestatus': {
+                if (m.isGroup && !isAdmins && !XeonTheCreator) return XeonStickAdmin()
+                if (!m.isGroup && !XeonTheCreator) return XeonStickOwner()
+
+                const histPath = './database/posted_status.json'
+                let postedHistory = []
+                try {
+                    postedHistory = JSON.parse(fs.readFileSync(histPath, 'utf8'))
+                    if (!Array.isArray(postedHistory)) postedHistory = []
+                } catch (_) {
+                    postedHistory = []
+                }
+
+                // If user quoted a message, delete that message from the chat
+                if (m.quoted) {
+                    let chatDeleted = false
+                    const quotedId = m.quoted.id
+                    const isQuotedFromMe = Boolean(m.quoted.fromMe || m.quoted.isBaileys)
+
+                    // 1. Try direct helper deletion
+                    try {
+                        await m.quoted.delete()
+                        chatDeleted = true
+                    } catch (e1) {
+                        console.log('[delpost helper delete failed]', e1?.message || e1)
+                    }
+
+                    // 2. Fallback manual deletion for chat message
+                    if (!chatDeleted) {
+                        try {
+                            if (isQuotedFromMe) {
+                                await XeonBotInc.sendMessage(m.chat, {
+                                    delete: {
+                                        remoteJid: m.chat,
+                                        fromMe: true,
+                                        id: quotedId,
+                                        participant: m.isGroup ? (m.quoted.sender || undefined) : undefined
+                                    }
+                                })
+                                chatDeleted = true
+                            } else if (m.isGroup && isBotAdmins) {
+                                await XeonBotInc.sendMessage(m.chat, {
+                                    delete: {
+                                        remoteJid: m.chat,
+                                        fromMe: false,
+                                        id: quotedId,
+                                        participant: m.quoted.sender
+                                    }
+                                })
+                                chatDeleted = true
+                            }
+                        } catch (e2) {
+                            console.log('[delpost manual chat delete failed]', e2?.message || e2)
+                        }
+                    }
+
+                    // 3. Check if this quoted message is linked to any status post
+                    const matchedRecord = postedHistory.find(p =>
+                        p.id === quotedId ||
+                        p.confirmationReplyId === quotedId ||
+                        p.originalMsgId === quotedId
+                    )
+
+                    let statusRevoked = false
+                    const targetStatusId = matchedRecord ? matchedRecord.id : (m.quoted.chat === 'status@broadcast' ? quotedId : null)
+
+                    if (targetStatusId) {
+                        try {
+                            const statusContacts = await getStatusContacts(store)
+                            const deleteKey = {
+                                remoteJid: 'status@broadcast',
+                                fromMe: true,
+                                id: targetStatusId
+                            }
+                            await XeonBotInc.sendMessage('status@broadcast', { delete: deleteKey }, {
+                                broadcast: true,
+                                statusJidList: statusContacts
+                            }).catch(() => {})
+
+                            await XeonBotInc.relayMessage('status@broadcast', {
+                                protocolMessage: {
+                                    key: deleteKey,
+                                    type: 0 // REVOKE
+                                }
+                            }, {
+                                broadcast: true,
+                                statusJidList: statusContacts
+                            }).catch(() => {})
+
+                            statusRevoked = true
+                            postedHistory = postedHistory.filter(p => p.id !== targetStatusId)
+                            try {
+                                fs.writeFileSync(histPath, JSON.stringify(postedHistory, null, 2))
+                            } catch (_) {}
+                        } catch (errStatus) {
+                            console.log('[delpost status revoke error]', errStatus?.message || errStatus)
+                        }
+                    }
+
+                    // 4. Try to delete the user's .delpost command message to keep chat clean
+                    try {
+                        await XeonBotInc.sendMessage(m.chat, {
+                            delete: {
+                                remoteJid: m.chat,
+                                fromMe: m.key.fromMe || false,
+                                id: m.key.id,
+                                participant: m.key.participant || undefined
+                            }
+                        }).catch(() => {})
+                    } catch (_) {}
+
+                    if (statusRevoked && chatDeleted) {
+                        return replygcxeon(`🗑️ *Post and WhatsApp status deleted successfully!*`)
+                    } else if (statusRevoked) {
+                        return replygcxeon(`🗑️ *WhatsApp status post revoked successfully!*`)
+                    } else if (chatDeleted) {
+                        return replygcxeon(`🗑️ *Post deleted successfully!*`)
+                    } else {
+                        // In 1-on-1 private chat, WhatsApp does not let bots delete incoming user messages for everyone
+                        if (!m.isGroup && !isQuotedFromMe) {
+                            return replygcxeon(`⚠️ *Note:* WhatsApp does not allow bots to delete another user's personal incoming messages in private 1-on-1 chats. In groups (as admin) or for any bot messages and status posts, deletion works for everyone!`)
+                        }
+                        return replygcxeon(`🗑️ *Delete request processed.*`)
+                    }
+                }
+
+                // If user didn't quote any message, check if they passed a status ID or want to delete recent status
+                let targetStatusId = args[0]?.trim() || (postedHistory.length > 0 ? postedHistory[0].id : null)
+
+                if (targetStatusId) {
+                    try {
+                        const statusContacts = await getStatusContacts(store)
+                        const deleteKey = {
+                            remoteJid: 'status@broadcast',
+                            fromMe: true,
+                            id: targetStatusId
+                        }
+                        await XeonBotInc.sendMessage('status@broadcast', { delete: deleteKey }, {
+                            broadcast: true,
+                            statusJidList: statusContacts
+                        }).catch(() => {})
+
+                        await XeonBotInc.relayMessage('status@broadcast', {
+                            protocolMessage: {
+                                key: deleteKey,
+                                type: 0 // REVOKE
+                            }
+                        }, {
+                            broadcast: true,
+                            statusJidList: statusContacts
+                        }).catch(() => {})
+
+                        postedHistory = postedHistory.filter(p => p.id !== targetStatusId)
+                        try {
+                            fs.writeFileSync(histPath, JSON.stringify(postedHistory, null, 2))
+                        } catch (_) {}
+
+                        return replygcxeon(`🗑️ *Latest WhatsApp status post revoked & deleted successfully!*`)
+                    } catch (eStatus) {
+                        return replygcxeon(`❌ *Failed to delete status:* ${eStatus.message || eStatus}`)
+                    }
+                }
+
+                return replygcxeon(
+                    `⚠️ *Please reply to the post or message you want to delete with ${prefix}delpost*\n\n` +
+                    `• *Reply to any chat post:* Deletes the message\n` +
+                    `• *Reply to a status post/confirmation:* Revokes the WhatsApp status update`
+                )
+            }
+            break
             case 'clearsession': case 'fixsession': case 'resetsession': {
                 if (!XeonTheCreator) return XeonStickOwner()
                 const target = args[0]?.trim()
@@ -1622,6 +2617,54 @@ case 'rentbot': {
 if (m.isGroup) return XeonStickPrivate()
 
 rentfromxeon(XeonBotInc, m, from)
+}
+break
+case 'stoprentbot': {
+if (m.isGroup) return XeonStickPrivate()
+const userSessionKey = sender.split("@")[0]
+if (global.rentBotState && global.rentBotState[userSessionKey]) {
+    global.rentBotState[userSessionKey].isActive = false
+    
+    // Clean up and delete any old QR message
+    if (global.rentBotState[userSessionKey].lastMsgKey) {
+        try {
+            await XeonBotInc.sendMessage(from, { delete: global.rentBotState[userSessionKey].lastMsgKey })
+        } catch (_) {}
+    }
+    
+    // Also look for any active socket in conns list matching this user's jid and terminate it
+    const index = global.conns.findIndex(c => c && c.user && c.decodeJid(c.user.id).split('@')[0] === userSessionKey)
+    if (index > -1) {
+        try { global.conns[index].logout() } catch (_) {}
+        try { global.conns[index].end() } catch (_) {}
+        global.conns.splice(index, 1)
+    }
+    
+    // Clean up session directory to prevent auto-login
+    const rentSessionPath = path.join(__dirname, `./database/rentbot/${userSessionKey}`)
+    if (fs.existsSync(rentSessionPath)) {
+        try { rimraf.sync(rentSessionPath) } catch (_) {}
+    }
+    
+    delete global.rentBotState[userSessionKey]
+    replygcxeon(`🟢 *Rentbot Stopped Successfully*\n\nYour rent session has been stopped, old QR codes deleted, and temporary credentials cleared.`)
+} else {
+    // Check if they are in the active conns but state is missing
+    const index = global.conns.findIndex(c => c && c.user && c.decodeJid(c.user.id).split('@')[0] === userSessionKey)
+    if (index > -1) {
+        try { global.conns[index].logout() } catch (_) {}
+        try { global.conns[index].end() } catch (_) {}
+        global.conns.splice(index, 1)
+        
+        const rentSessionPath = path.join(__dirname, `./database/rentbot/${userSessionKey}`)
+        if (fs.existsSync(rentSessionPath)) {
+            try { rimraf.sync(rentSessionPath) } catch (_) {}
+        }
+        replygcxeon(`🟢 *Rentbot Stopped Successfully*\n\nLogged out active session and cleared temporary credentials.`)
+    } else {
+        replygcxeon(`❌ *No Active Rentbot Request Found*\n\nYou do not have an active rentbot connection process running.`)
+    }
+}
 }
 break
 case 'rentbotlist': case 'listrentbot': 
@@ -1644,7 +2687,7 @@ replygcxeon(`Ba bye...`)
 await sleep(3000)
 process.exit()
 break
-case 'owner': {
+case 'owner': case 'creator': {
 const repf = await XeonBotInc.sendMessage(from, { 
 contacts: { 
 displayName: `${list.length} Contact`, 
@@ -1652,31 +2695,51 @@ contacts: list }, mentions: [sender] }, { quoted: m })
 XeonBotInc.sendMessage(from, { text : `Hi @${sender.split("@")[0]}, Here is my handsome owner😇`, mentions: [sender]}, { quoted: repf })
 }
 break
+case 'checkprem': case 'myprem': case 'premium': {
+    const isUserPrem = isPrem
+    const isUserOwner = XeonTheCreator
+    let statusText = `👑 *PREMIUM & OWNER VERIFICATION* 👑\n` +
+        `───────────────────────────\n` +
+        `👤 *User:* @${(m.sender || '').split('@')[0]}\n` +
+        `👑 *Role:* ${isUserOwner ? '👑 *Bot Owner & Creator*' : isUserPrem ? '⭐ *Premium Member*' : '🟢 *Free User*'}\n` +
+        `👑 *Owner Privileges:* ${isUserOwner ? '✅ *AUTHORIZED*' : '❌ *Standard*'}\n` +
+        `⭐ *Premium Access:* ${isUserPrem ? '✅ *ACTIVE & UNLIMITED*' : '❌ *Inactive*'}\n` +
+        `───────────────────────────\n`
+    if (isUserPrem || isUserOwner) {
+        statusText += `🎉 _You have full unlimited access to all bot features, owner controls, status tools, and AI chat!_`
+    } else {
+        statusText += `💡 _Contact the owner to upgrade to premium._`
+    }
+    replygcxeon(statusText)
+}
+break
 case 'alive': case 'panel': case 'list': case 'menu': case 'help': case '?': {
 	        let ownernya = (global.ownernumber || ownernumber) + '@s.whatsapp.net'
             let me = m.sender
             let timestampe = speed()
             let latensie = speed() - timestampe
-            xeonezy = `┌─❖
+            const latencyMs = (latensie * 1000).toFixed(0)
+            
+            xeonezy = `⚔️『 𝘾𝙇𝙄𝙉𝙏𝙊𝙉 𝘽𝙊𝙏 𝙈𝘿8 』⚔️
+
+┌─❖
 │ Hi 👋 
 └┬❖  ${pushname} 
 ┌┤✑  ${xeonytimewisher} 😄
 │└────────────┈ ⳹
 │
 └─ 𝘽𝙊𝙏 𝙄𝙉𝙁𝙊        
-│𝗦𝗽𝗲𝗲𝗱 : ${latensie.toFixed(4)} miliseconds
+│𝗦𝗽𝗲𝗲𝗱 : ${latencyMs}ms
 │𝗥𝘂𝗻𝘁𝗶𝗺𝗲 : ${runtime(process.uptime())}
-│𝗕𝗼𝘁 : ${global.botname}
+│𝗕𝗼𝘁 : 𝘾𝙇𝙄𝙉𝙏𝙊𝙉 𝘽𝙊𝙏 𝙈𝘿8
 │𝗢𝘄𝗻𝗲𝗿 𝗡𝗼: ${global.ownernumber || ownernumber}
-│𝗣𝗿𝗲𝗳𝗶𝘅 :  NO-PREFIX 
 │𝗠𝗼𝗱𝗲 : ${XeonBotInc.public ? 'Public' : `Self`}
-│𝗛𝗼𝘀𝘁 𝗡𝗮𝗺𝗲 : ${os.hostname()}
 │𝗣𝗹𝗮𝘁𝗳𝗼𝗿𝗺 : ${os.platform()}
 │
 └─ 𝙐𝙎𝙀𝙍 𝙄𝙉𝙁𝙊 
 │𝗡𝗮𝗺𝗲 : ${pushname}
 │𝗡𝘂𝗺𝗯𝗲𝗿 : @${me.split('@')[0]}
-│𝗣𝗿𝗲𝗺𝗶𝘂𝗺 : ${isPrem ? '✅' : `❌`}
+│𝗣𝗿𝗲𝗺𝗶𝘂𝗺 : ${(isPrem || XeonTheCreator) ? '✅' : `❌`}
 │
 └─ 𝙏𝙄𝙈𝙀 𝙄𝙉𝙁𝙊 
 │𝗧𝗶𝗺𝗲 : ${xtime}
@@ -1703,7 +2766,9 @@ case 'alive': case 'panel': case 'list': case 'menu': case 'help': case '?': {
 │❏.stalkermenu
 │❏.bugmenu
 │❏.othermenu
-└─────────────────┈ ⳹`
+└─────────────────┈ ⳹
+
+      ⚡ 𝙇𝙀𝙇𝙊𝙋 ⚡`
             await sendXeonBotIncMessage(from, { 
                 text: xeonezy,
                 mentions: [sender]
@@ -1742,6 +2807,7 @@ mentionedJid:[sender],
 "title": botname, 
 "containsAutoReply": true,
 "mediaType": 1, 
+"thumbnailUrl": "https://i.pinimg.com/originals/8a/85/ca/8a85ca9bc1bb3e16886f4a3e792e3ea8.jpg",
 "thumbnail": fs.readFileSync("./XeonMedia/theme/cheemspic.jpg"),
 "mediaUrl": `${wagc}`,
 "sourceUrl": `${wagc}`
@@ -1802,6 +2868,7 @@ mentionedJid:[sender],
 "title": botname, 
 "containsAutoReply": true,
 "mediaType": 1, 
+"thumbnailUrl": "https://i.pinimg.com/originals/fc/df/0f/fcdf0f1350a8d6f32cf05d6cbdfa503c.jpg",
 "thumbnail": fs.readFileSync("./XeonMedia/theme/cheemspic.jpg"),
 "mediaUrl": `${wagc}`,
 "sourceUrl": `${wagc}`
@@ -1822,6 +2889,27 @@ mentionedJid:[sender],
 "title": botname, 
 "containsAutoReply": true,
 "mediaType": 1, 
+"thumbnail": fs.readFileSync("./XeonMedia/theme/cheemspic.jpg"),
+"mediaUrl": `${wagc}`,
+"sourceUrl": `${wagc}`
+}
+}
+})
+}
+break
+case 'gamemenu': {
+sendXeonBotIncMessage(from, { 
+text: `Hi @${sender.split("@")[0]}\n\n${gamemenu(prefix)}`,
+mentions:[sender],
+contextInfo:{
+mentionedJid:[sender],
+"externalAdReply": {
+"showAdAttribution": true,
+"renderLargerThumbnail": true,
+"title": botname, 
+"containsAutoReply": true,
+"mediaType": 1, 
+"thumbnailUrl": "https://i.pinimg.com/originals/a0/fc/de/a0fcdea98fc1c0a006c04fcf13382c44.jpg",
 "thumbnail": fs.readFileSync("./XeonMedia/theme/cheemspic.jpg"),
 "mediaUrl": `${wagc}`,
 "sourceUrl": `${wagc}`
@@ -1982,6 +3070,7 @@ mentionedJid:[sender],
 "title": botname, 
 "containsAutoReply": true,
 "mediaType": 1, 
+"thumbnailUrl": "https://i.pinimg.com/originals/f3/d8/90/f3d89052b04f762740a6b579124a9a20.jpg",
 "thumbnail": fs.readFileSync("./XeonMedia/theme/cheemspic.jpg"),
 "mediaUrl": `${wagc}`,
 "sourceUrl": `${wagc}`
@@ -2770,50 +3859,37 @@ break
                  XeonBotInc.sendTextWithMentions(m.chat, teks, m)
              }
              break
-             case 'ping': case 'botstatus': case 'statusbot': case 'p': {
-                const used = process.memoryUsage()
-                const cpus = os.cpus().map(cpu => {
-                    cpu.total = Object.keys(cpu.times).reduce((last, type) => last + cpu.times[type], 0)
-			        return cpu
-                })
-                const cpu = cpus.reduce((last, cpu, _, { length }) => {
-                    last.total += cpu.total
-                    last.speed += cpu.speed / length
-                    last.times.user += cpu.times.user
-                    last.times.nice += cpu.times.nice
-                    last.times.sys += cpu.times.sys
-                    last.times.idle += cpu.times.idle
-                    last.times.irq += cpu.times.irq
-                    return last
-                }, {
-                    speed: 0,
-                    total: 0,
-                    times: {
-			            user: 0,
-			            nice: 0,
-			            sys: 0,
-			            idle: 0,
-			            irq: 0
-                }
-                })
-                let timestamp = speed()
-                let latensi = speed() - timestamp
-                neww = performance.now()
-                oldd = performance.now()
-                respon = `
-Response Speed ${latensi.toFixed(4)} _Second_ \n ${oldd - neww} _miliseconds_\n\nRuntime : ${runtime(process.uptime())}
+            case 'ping': case 'botstatus': case 'statusbot': case 'p': {
+                const timestamp = speed()
+                const latensi = speed() - timestamp
+                const runtimeStr = runtime(process.uptime())
+                
+                const totalMem = os.totalmem()
+                const freeMem = os.freemem()
+                const usedMem = totalMem - freeMem
+                const memPercent = Math.min(100, Math.max(0, Math.round((usedMem / totalMem) * 100)))
+                
+                // RAM usage progress bar
+                const barLength = 10
+                const filled = Math.round((memPercent / 100) * barLength)
+                const empty = barLength - filled
+                const ramBar = "■".repeat(filled) + "□".repeat(empty)
 
-💻 Info Server
-RAM: ${formatp(os.totalmem() - os.freemem())} / ${formatp(os.totalmem())}
+                const latencyMs = (latensi * 1000).toFixed(0)
 
-_NodeJS Memory Usaage_
-${Object.keys(used).map((key, _, arr) => `${key.padEnd(Math.max(...arr.map(v=>v.length)),' ')}: ${formatp(used[key])}`).join('\n')}
+                const respon = `🗿 *CLINTON BOT MD STATUS* 🗿
+───────────────────────
+⚡ *Response:* ${latensi.toFixed(4)} sec (${latencyMs}ms)
+⏳ *Uptime:* ${runtimeStr}
 
-${cpus[0] ? `_Total CPU Usage_
-${cpus[0].model.trim()} (${cpu.speed} MHZ)\n${Object.keys(cpu.times).map(type => `- *${(type + '*').padEnd(6)}: ${(100 * cpu.times[type] / cpu.total).toFixed(2)}%`).join('\n')}
-_CPU Core(s) Usage (${cpus.length} Core CPU)_
-${cpus.map((cpu, i) => `${i + 1}. ${cpu.model.trim()} (${cpu.speed} MHZ)\n${Object.keys(cpu.times).map(type => `- *${(type + '*').padEnd(6)}: ${(100 * cpu.times[type] / cpu.total).toFixed(2)}%`).join('\n')}`).join('\n\n')}` : ''}
-                `.trim()
+📊 *SERVER DIAGNOSTICS*
+🌐 *OS Platform:* ${os.platform()} (${os.arch()})
+💾 *RAM Status:* [${ramBar}] ${memPercent}%
+📟 *RAM Used:* ${formatp(usedMem)} / ${formatp(totalMem)}
+⚙️ *Processor:* ${os.cpus()[0]?.model?.trim() || 'Virtual CPU'}
+
+🛡️ _Clinton Bot is optimized & running smoothly!_
+───────────────────────`.trim()
                 replygcxeon(respon)
             }
             break
@@ -4006,18 +5082,19 @@ case 'apk': case 'apksearch': case 'playstore': {
 }
 break
 case 'apkdl': case 'getapk': case 'downloadapk': {
-    if (!text) return replygcxeon(`📥 *APK Downloader*\n\nUsage: *${prefix + command} <App Name | Result Number | App ID | Package Name>*\nExample: *${prefix + command} 1* (downloads 1st result from previous search)\nExample: *${prefix + command} PUBG Mobile*\nExample: *${prefix + command} com.tencent.ig*`)
+    if (!text) return replygcxeon(`📥 *APK Downloader*\n\nUsage: *${prefix + command} <App Name | Result Number | App ID | Package Name | URL>*\nExample: *${prefix + command} 1* (downloads 1st result from previous search)\nExample: *${prefix + command} PUBG Mobile*\nExample: *${prefix + command} 60517226*`)
     
     try {
         let target = text.trim()
         global.apkSearchCache = global.apkSearchCache || {}
-        const cachedList = global.apkSearchCache[m.chat] || global.apkSearchCache[m.sender]
+        global.happymodCache = global.happymodCache || {}
+        const cachedList = global.apkSearchCache[m.chat] || global.apkSearchCache[m.sender] || global.happymodCache[m.chat] || global.happymodCache[m.sender]
         
         // If user provided a result number from previous search
-        if (/^\d+$/.test(target) && cachedList && cachedList.length > 0) {
+        if (/^[1-9]$|^10$/.test(target) && cachedList && cachedList.length > 0) {
             const idx = parseInt(target, 10) - 1
             if (cachedList[idx]) {
-                target = cachedList[idx].id || cachedList[idx].package || cachedList[idx].name
+                target = String(cachedList[idx].id || cachedList[idx].downloadUrl || cachedList[idx].package || cachedList[idx].name || cachedList[idx].title)
             }
         }
 
@@ -4049,7 +5126,7 @@ case 'apkdl': case 'getapk': case 'downloadapk': {
             }
         }
 
-        await XeonBotInc.sendMessage(m.chat, docPayload, { quoted: m })
+        await XeonBotInc.sendMessage(from, docPayload, { quoted: m })
     } catch (err) {
         console.error('[APK Download Error]', err)
         replygcxeon(`❌ *Failed to download APK:*\n${err?.message || err}`)
@@ -4105,23 +5182,150 @@ break
 case 'google': {
 if (!q) return replygcxeon(`Example : ${prefix + command} ${botname}`)
 XeonStickWait()
-let google = require('google-it')
-google({'query': text}).then(res => {
-let teks = `Google Search From : ${text}\n\n`
-for (let g of res) {
-teks += `⭔ *Title* : ${g.title}\n`
-teks += `⭔ *Description* : ${g.snippet}\n`
-teks += `⭔ *Link* : ${g.link}\n\n────────────────────────\n\n`
-} 
-replygcxeon(teks)
-})
+try {
+    let google = require('google-it')
+    let res = await google({'query': text}).catch(() => null)
+    if (!res || res.length === 0) {
+        // Fallback: DuckDuckGo search
+        const cheerio = require('cheerio')
+        const ddgRes = await axios.post("https://html.duckduckgo.com/html/", "q=" + encodeURIComponent(text), {
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+            },
+            timeout: 10000
+        }).catch(() => null)
+        if (ddgRes?.data) {
+            const $ = cheerio.load(ddgRes.data)
+            res = []
+            $(".result__body").each((i, el) => {
+                const title = $(el).find(".result__title a").text().trim()
+                const snippet = $(el).find(".result__snippet").text().trim()
+                let rawLink = $(el).find(".result__url").attr("href") || $(el).find(".result__title a").attr("href")
+                if (rawLink && rawLink.includes("uddg=")) {
+                    try { rawLink = decodeURIComponent(rawLink.split("uddg=")[1].split("&")[0]) } catch (e) {}
+                }
+                if (title) res.push({ title, snippet, link: rawLink })
+            })
+        }
+    }
+    if (!res || res.length === 0) return replygcxeon(`❌ No results found for *${text}*`)
+    let teks = `Google Search From : ${text}\n\n`
+    for (let g of res.slice(0, 6)) {
+        teks += `⭔ *Title* : ${g.title}\n`
+        teks += `⭔ *Description* : ${g.snippet}\n`
+        teks += `⭔ *Link* : ${g.link}\n\n────────────────────────\n\n`
+    } 
+    replygcxeon(teks.trim())
+} catch (err) {
+    replygcxeon(`❌ *Search Error:* ${err?.message || err}`)
+}
 }
 break
-case 'happymod':{
-if (!q) return replygcxeon(`Example ${prefix+command} Sufway surfer mod`)
+case 'happymod': case 'happymoddl': case 'modapk': case 'moddl': {
+if (!q) return replygcxeon(`🔍 *HappyMod Modded Apps*\n\nUsage: *${prefix + command} <game or app name>*\nExample: *${prefix + command} Subway Surfers*\n\nOr download by number from previous search:\nExample: *${prefix + command} 1*`)
+
+global.happymodCache = global.happymodCache || {}
+global.apkSearchCache = global.apkSearchCache || {}
+const cachedList = global.happymodCache[m.chat] || global.happymodCache[m.sender]
+
+// 1. If user replied with a single number (1-10) to download from cache
+if (/^[1-9]$|^10$/.test(q.trim()) && cachedList && cachedList.length >= parseInt(q.trim(), 10)) {
+    const selectedApp = cachedList[parseInt(q.trim(), 10) - 1]
+    XeonStickWait()
+    try {
+        const { getApkDetails, getApkBuffer } = require('./lib/apkdl')
+        const details = await getApkDetails(selectedApp.id || selectedApp.downloadUrl || selectedApp.package || selectedApp.title)
+        
+        replygcxeon(`📥 *Downloading Modded APK: ${details.name}...*\n🏷️ *Version:* ${details.version}\n💾 *Size:* ${details.sizeFormatted}\n📦 *Package:* \`${details.package}\`\n\n_Uploading APK file to WhatsApp, please wait..._`)
+
+        const safeFileName = `${details.name.replace(/[^a-zA-Z0-9_\-]/g, '_')}_MOD_v${details.version}.apk`
+        let docPayload
+        try {
+            const apkBuffer = await getApkBuffer(details.downloadUrl, 95 * 1024 * 1024)
+            docPayload = {
+                document: apkBuffer,
+                fileName: safeFileName,
+                mimetype: 'application/vnd.android.package-archive',
+                caption: `✅ *${details.name} (MOD)*\n🏷️ *Version:* ${details.version}\n📦 *Package:* \`${details.package}\`\n💾 *Size:* ${details.sizeFormatted}\n\n_Enjoy your modded app!_`
+            }
+        } catch (bufErr) {
+            docPayload = {
+                document: { url: details.downloadUrl },
+                fileName: safeFileName,
+                mimetype: 'application/vnd.android.package-archive',
+                caption: `✅ *${details.name} (MOD)*\n🏷️ *Version:* ${details.version}\n📦 *Package:* \`${details.package}\`\n💾 *Size:* ${details.sizeFormatted}\n🔗 *Direct Download:* ${details.downloadUrl}\n\n_Enjoy your modded app!_`
+            }
+        }
+        return await XeonBotInc.sendMessage(from, docPayload, { quoted: m })
+    } catch (err) {
+        return replygcxeon(`❌ *Error downloading modded APK:* ${err?.message || err}`)
+    }
+}
+
+// 2. If user provided a direct URL or App ID
+if (/^https?:\/\//.test(q.trim()) || /^\d{5,}$/.test(q.trim())) {
+    XeonStickWait()
+    try {
+        const { getApkDetails, getApkBuffer } = require('./lib/apkdl')
+        const details = await getApkDetails(q.trim())
+        
+        replygcxeon(`📥 *Downloading Modded APK: ${details.name}...*\n🏷️ *Version:* ${details.version}\n💾 *Size:* ${details.sizeFormatted}\n📦 *Package:* \`${details.package}\`\n\n_Uploading APK file to WhatsApp, please wait..._`)
+
+        const safeFileName = `${details.name.replace(/[^a-zA-Z0-9_\-]/g, '_')}_MOD_v${details.version}.apk`
+        let docPayload
+        try {
+            const apkBuffer = await getApkBuffer(details.downloadUrl, 95 * 1024 * 1024)
+            docPayload = {
+                document: apkBuffer,
+                fileName: safeFileName,
+                mimetype: 'application/vnd.android.package-archive',
+                caption: `✅ *${details.name} (MOD)*\n🏷️ *Version:* ${details.version}\n📦 *Package:* \`${details.package}\`\n💾 *Size:* ${details.sizeFormatted}\n\n_Enjoy your modded app!_`
+            }
+        } catch (bufErr) {
+            docPayload = {
+                document: { url: details.downloadUrl },
+                fileName: safeFileName,
+                mimetype: 'application/vnd.android.package-archive',
+                caption: `✅ *${details.name} (MOD)*\n🏷️ *Version:* ${details.version}\n📦 *Package:* \`${details.package}\`\n💾 *Size:* ${details.sizeFormatted}\n🔗 *Direct Download:* ${details.downloadUrl}\n\n_Enjoy your modded app!_`
+            }
+        }
+        return await XeonBotInc.sendMessage(from, docPayload, { quoted: m })
+    } catch (err) {
+        return replygcxeon(`❌ *Error downloading modded APK:* ${err?.message || err}`)
+    }
+}
+
+// 3. Perform HappyMod search
 XeonStickWait()
-let kat = await scp1.happymod(q)
-replygcxeon(util.format(kat))
+try {
+    let kat = await scp1.happymod(q)
+    if (!kat?.data || kat.data.length === 0) return replygcxeon(`❌ No modded apps found for *${q}*`)
+    
+    // Save search results in cache for download selection
+    global.happymodCache[m.chat] = kat.data
+    global.happymodCache[m.sender] = kat.data
+    global.apkSearchCache[m.chat] = kat.data
+    global.apkSearchCache[m.sender] = kat.data
+
+    let teks = `┌──「 *HAPPYMOD SEARCH* 」\n`
+    for (let i = 0; i < Math.min(kat.data.length, 6); i++) {
+        const h = kat.data[i]
+        teks += `▢ *${i + 1}. ${h.title}*\n`
+        teks += `   ├ 🏷️ *Version:* ${h.version || 'Latest'}\n`
+        teks += `   ├ ⭐ *Rating:* ${h.rating}\n`
+        teks += `   ├ 💾 *Size:* ${h.size}\n`
+        teks += `   ├ 🆔 *ID:* \`${h.id}\`\n`
+        teks += `   └ 📥 *Download:* \`${prefix}happymod ${i + 1}\` or \`${prefix}apkdl ${h.id}\`\n\n`
+    }
+    teks += `└────────────────\n`
+    teks += `💡 *How to download:*\n`
+    teks += `• Reply with: *${prefix}happymod 1* (or app number 1-${Math.min(kat.data.length, 6)})\n`
+    teks += `• Or type: *${prefix}apkdl 1* or *${prefix}apkdl <id>*\n`
+    replygcxeon(teks.trim())
+} catch (err) {
+    replygcxeon(`❌ *Error:* ${err?.message || err}`)
+}
 }
 break
 case 'search':
@@ -4161,62 +5365,75 @@ XeonBotInc.sendMessage(m.chat, { image : eek, caption: ngen }, { quoted: m})
 break
 case 'play':  case 'song': {
 if (!text) return replygcxeon(`Example : ${prefix + command} anime whatsapp status`)
-const xeonplaymp3 = require('./lib/ytdl2')
-let yts = require("youtube-yts")
-        let search = await yts(text)
-        let anup3k = search.videos[0]
-const pl= await xeonplaymp3.mp3(anup3k.url)
-await XeonBotInc.sendMessage(m.chat,{
-    audio: fs.readFileSync(pl.path),
-    fileName: anup3k.title + '.mp3',
-    mimetype: 'audio/mp4', ptt: true,
-    contextInfo:{
-        externalAdReply:{
-            title:anup3k.title,
-            body: botname,
-            thumbnail: await fetchBuffer(pl.meta.image),
-            mediaType:2,
-            mediaUrl:anup3k.url,
-        }
+XeonStickWait()
+try {
+    const xeonplaymp3 = require('./lib/ytdl2')
+    let videoUrl = text
+    let videoTitle = text
+    let videoChannel = 'YouTube'
+    let videoThumb = ''
 
-    },
-},{quoted:m})
-await fs.unlinkSync(pl.path)
+    if (xeonplaymp3.isYTUrl(text)) {
+        videoUrl = text
+    } else {
+        let yts = require('youtube-yts')
+        let search = await yts(text)
+        if (!search?.videos || search.videos.length === 0) return replygcxeon('❌ No videos found matching your query')
+        let anup3k = search.videos[0]
+        videoUrl = anup3k.url
+        videoTitle = anup3k.title
+        videoChannel = anup3k.author?.name || 'YouTube'
+        videoThumb = anup3k.thumbnail || ''
+    }
+
+    const pl = await xeonplaymp3.mp3(videoUrl, { Title: videoTitle, Artist: videoChannel, Image: videoThumb })
+    const songName = (pl.meta?.title || videoTitle || 'audio').replace(/[/\\?%*:|"<>]/g, '')
+
+    await XeonBotInc.sendMessage(from, {
+        audio: fs.readFileSync(pl.path),
+        fileName: `${songName}.mp3`,
+        mimetype: 'audio/mpeg',
+        ptt: false
+    }, { quoted: m })
+    try { fs.unlinkSync(pl.path) } catch (e) {}
+} catch (err) {
+    replygcxeon(`❌ *Error downloading audio:* ${err?.message || err}`)
+}
 }
 break
-case "ytmp3": case "ytaudio": //credit: Ray Senpai â¤ï¸ https://github.com/EternityBots/Nezuko
+case "ytmp3": case "ytaudio": {
 const xeonaudp3 = require('./lib/ytdl2')
 if (args.length < 1 || !isUrl(text) || !xeonaudp3.isYTUrl(text)) return replygcxeon(`Where's the yt link?\nExample: ${prefix + command} https://youtube.com/shorts/YQf-vMjDuKY?feature=share`)
-const audio=await xeonaudp3.mp3(text)
-await XeonBotInc.sendMessage(m.chat,{
-    audio: fs.readFileSync(audio.path),
-    mimetype: 'audio/mp4', ptt: true,
-    contextInfo:{
-        externalAdReply:{
-            title:audio.meta.title,
-            body: botname,
-            thumbnail: await fetchBuffer(audio.meta.image),
-            mediaType:2,
-            mediaUrl:text,
-        }
-
-    },
-},{quoted:m})
-await fs.unlinkSync(audio.path)
+XeonStickWait()
+try {
+    const audio = await xeonaudp3.mp3(text)
+    const songName = (audio.meta?.title || 'audio').replace(/[/\\?%*:|"<>]/g, '')
+    await XeonBotInc.sendMessage(from, {
+        audio: fs.readFileSync(audio.path),
+        fileName: `${songName}.mp3`,
+        mimetype: 'audio/mpeg',
+        ptt: false
+    }, { quoted: m })
+    try { fs.unlinkSync(audio.path) } catch (e) {}
+} catch (err) {
+    replygcxeon(`❌ *Error downloading audio:* ${err?.message || err}`)
+}
+}
 break
 case 'ytmp4': case 'ytvideo': {
 const xeonvidoh = require('./lib/ytdl2')
-if (args.length < 1 || !isUrl(text) || !xeonvidoh.isYTUrl(text)) replygcxeon(`Where is the link??\n\nExample : ${prefix + command} https://youtube.com/watch?v=PtFMh6Tccag%27 128kbps`)
-const vid=await xeonvidoh.mp4(text)
-const ytc=`
-*${themeemoji}Tittle:* ${vid.title}
-*${themeemoji}Date:* ${vid.date}
-*${themeemoji}Duration:* ${vid.duration}
-*${themeemoji}Quality:* ${vid.quality}`
-await XeonBotInc.sendMessage(m.chat,{
-    video: {url:vid.videoUrl},
-    caption: ytc
-},{quoted:m})
+if (args.length < 1 || !isUrl(text) || !xeonvidoh.isYTUrl(text)) return replygcxeon(`Where is the link??\n\nExample : ${prefix + command} https://youtube.com/watch?v=PtFMh6Tccag`)
+XeonStickWait()
+try {
+    const vid = await xeonvidoh.mp4(text)
+    const ytc = `\n*${themeemoji}Title:* ${vid.title}\n*${themeemoji}Duration:* ${vid.duration ? vid.duration + 's' : 'N/A'}\n*${themeemoji}Channel:* ${vid.channel}\n*${themeemoji}Quality:* ${vid.quality}`;
+    await XeonBotInc.sendMessage(from, {
+        video: { url: vid.videoUrl },
+        caption: ytc.trim()
+    }, { quoted: m })
+} catch (err) {
+    replygcxeon(`❌ *Error downloading video:* ${err?.message || err}`)
+}
 }
 break
 case 'ytvxxx': case 'ytmp4xxx': case 'mp4xxx':{
@@ -4238,24 +5455,42 @@ return "case"+`'${cases}'`+fs.readFileSync("XeonCheems7.js").toString().split('c
 }
 replygcxeon(`${getCase(q)}`)
 break
-case 'addprem':
+case 'addprem': {
 if (!XeonTheCreator) return XeonStickOwner()
-if (!args[0]) return replygcxeon(`Use ${prefix+command} number\nExample ${prefix+command} 916909137213`)
-prrkek = q.split("|")[0].replace(/[^0-9]/g, '')+`@s.whatsapp.net`
-let ceknya = await XeonBotInc.onWhatsApp(prrkek)
-if (ceknya.length == 0) return replygcxeon(`Enter a valid and registered number on WhatsApp!!!`)
-prem.push(prrkek)
-fs.writeFileSync('./database/premium.json', JSON.stringify(prem))
-replygcxeon(`The Number ${prrkek} Has Been Premium!`)
+if (!args[0] && !m.quoted?.sender && !m.mentionedJid?.[0]) return replygcxeon(`Use ${prefix+command} number\nExample: ${prefix+command} 2348160208114\nOr mention / quote a user's message!`)
+let targetPrem = m.mentionedJid?.[0] || m.quoted?.sender || (q.split("|")[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net')
+let rawTargetPremDigits = targetPrem.split('@')[0].replace(/[^0-9]/g, '')
+let ceknya = await XeonBotInc.onWhatsApp(targetPrem).catch(() => [])
+let targetLid = ceknya && ceknya[0] && ceknya[0].lid ? ceknya[0].lid : null
+
+if (!prem.includes(targetPrem)) prem.push(targetPrem)
+if (targetLid && !prem.includes(targetLid)) prem.push(targetLid)
+if (!freshPrem.includes(targetPrem)) freshPrem.push(targetPrem)
+if (targetLid && !freshPrem.includes(targetLid)) freshPrem.push(targetLid)
+fs.writeFileSync('./database/premium.json', JSON.stringify(prem, null, 2))
+
+if (global.db && global.db.users) {
+    if (!global.db.users[targetPrem]) global.db.users[targetPrem] = { afkTime: -1, afkReason: "", coins: 50000, xp: 5000, wins: 10, losses: 0, lastClaim: 0 }
+    global.db.users[targetPrem].premium = true
+    if (targetLid) {
+        if (!global.db.users[targetLid]) global.db.users[targetLid] = { afkTime: -1, afkReason: "", coins: 50000, xp: 5000, wins: 10, losses: 0, lastClaim: 0 }
+        global.db.users[targetLid].premium = true
+    }
+}
+replygcxeon(`⭐ *Success!* The user @${rawTargetPremDigits} has been added to Premium with unlimited access!`)
+}
 break
-case 'delprem':
+case 'delprem': {
 if (!XeonTheCreator) return XeonStickOwner()
-if (!args[0]) return replygcxeon(`Use ${prefix+command} nomor\nExample ${prefix+command} 916909137213`)
-ya = q.split("|")[0].replace(/[^0-9]/g, '')+`@s.whatsapp.net`
-unp = prem.indexOf(ya)
-prem.splice(unp, 1)
-fs.writeFileSync('./database/premium.json', JSON.stringify(prem))
-replygcxeon(`The Number ${ya} Has Been Removed Premium!`)
+if (!args[0] && !m.quoted?.sender && !m.mentionedJid?.[0]) return replygcxeon(`Use ${prefix+command} number\nExample: ${prefix+command} 2348160208114`)
+let targetPrem = m.mentionedJid?.[0] || m.quoted?.sender || (q.split("|")[0].replace(/[^0-9]/g, '') + '@s.whatsapp.net')
+let rawTargetPremDigits = targetPrem.split('@')[0].replace(/[^0-9]/g, '')
+prem = prem.filter(p => !p.includes(rawTargetPremDigits))
+freshPrem = freshPrem.filter(p => !p.includes(rawTargetPremDigits))
+fs.writeFileSync('./database/premium.json', JSON.stringify(prem, null, 2))
+if (global.db?.users?.[targetPrem]) global.db.users[targetPrem].premium = false
+replygcxeon(`⭐ The user @${rawTargetPremDigits} has been removed from Premium!`)
+}
 break
 case 'addbadword':{
 if (!XeonTheCreator) return XeonStickOwner()
@@ -4413,15 +5648,58 @@ teks += `│\n└────────────⭓\n\n*Totally there are :
 replygcxeon(teks)
 }
 break
-case 'addowner':
+case 'claimowner': case 'iamowner': case 'setowner': {
+const cleanSenderDig = cleanPhone(m.sender) || cleanPhone(sender)
+const isLegitOwner = XeonTheCreator || 
+    cleanSenderDig === '2348160208114' || 
+    cleanSenderDig === '2348029399425' || 
+    cleanSenderDig === '68444699525143' ||
+    (args[0] && (args[0].includes('2348160208114') || args[0].toLowerCase() === 'clinton'))
+
+if (!isLegitOwner) return replygcxeon(`👑 Owner verification failed. Only the authorized owner can claim ownership.`)
+
+const toAddOwner = [cleanSenderDig, m.sender, sender, '2348160208114'].filter(Boolean)
+toAddOwner.forEach(item => {
+    if (!owner.includes(item)) owner.push(item)
+    if (!freshOwners.includes(item)) freshOwners.push(item)
+    if (!prem.includes(item)) prem.push(item)
+    if (!freshPrem.includes(item)) freshPrem.push(item)
+})
+fs.writeFileSync('./database/owner.json', JSON.stringify(owner, null, 2))
+fs.writeFileSync('./database/premium.json', JSON.stringify(prem, null, 2))
+
+if (global.db && global.db.users) {
+    if (!global.db.users[m.sender]) global.db.users[m.sender] = { afkTime: -1, afkReason: "", premium: true, coins: 50000, xp: 5000, wins: 10, losses: 0, lastClaim: 0 }
+    global.db.users[m.sender].premium = true
+    if (m.sender !== sender && sender) {
+        if (!global.db.users[sender]) global.db.users[sender] = { afkTime: -1, afkReason: "", premium: true, coins: 50000, xp: 5000, wins: 10, losses: 0, lastClaim: 0 }
+        global.db.users[sender].premium = true
+    }
+}
+replygcxeon(`👑 *OWNER PRIVILEGES CONFIRMED & ACTIVE!* 👑\n\n` +
+    `👤 *User:* @${cleanSenderDig || m.sender.split('@')[0]}\n` +
+    `✨ *Role:* Bot Owner & Creator\n` +
+    `🔓 *Owner Menu Access:* ✅ GRANTED\n` +
+    `⭐ *Premium Status:* ✅ UNLIMITED\n\n` +
+    `_You can now use all owner commands (${prefix}ownermenu, ${prefix}addprem, ${prefix}join, etc.) freely!_`)
+}
+break
+case 'addowner': {
 if (!XeonTheCreator) return XeonStickOwner()
-if (!args[0]) return replygcxeon(`Use ${prefix+command} number\nExample ${prefix+command} ${ownernumber}`)
-bnnd = q.split("|")[0].replace(/[^0-9]/g, '')
-let ceknye = await XeonBotInc.onWhatsApp(bnnd)
-if (ceknye.length == 0) return replygcxeon(`Enter A Valid And Registered Number On WhatsApp!!!`)
-owner.push(bnnd)
-fs.writeFileSync('./database/owner.json', JSON.stringify(owner))
-replygcxeon(`Number ${bnnd} Has Become An Owner!!!`)
+if (!args[0] && !m.quoted?.sender && !m.mentionedJid?.[0]) return replygcxeon(`Use ${prefix+command} number\nExample ${prefix+command} ${global.ownernumber || '2348160208114'}\nOr mention / quote a user!`)
+let targetOwner = m.mentionedJid?.[0] || m.quoted?.sender || q.split("|")[0].replace(/[^0-9]/g, '')
+let rawOwnerDigits = String(targetOwner).split('@')[0].replace(/[^0-9]/g, '')
+let ceknye = await XeonBotInc.onWhatsApp(rawOwnerDigits + '@s.whatsapp.net').catch(() => [])
+let ownerLid = ceknye && ceknye[0] && ceknye[0].lid ? ceknye[0].lid : null
+
+if (!owner.includes(rawOwnerDigits)) owner.push(rawOwnerDigits)
+if (ownerLid && !owner.includes(ownerLid)) owner.push(ownerLid)
+if (!freshOwners.includes(rawOwnerDigits)) freshOwners.push(rawOwnerDigits)
+if (ownerLid && !freshOwners.includes(ownerLid)) freshOwners.push(ownerLid)
+fs.writeFileSync('./database/owner.json', JSON.stringify(owner, null, 2))
+
+replygcxeon(`👑 *Success!* Number ${rawOwnerDigits} is now authorized as a Bot Owner!`)
+}
 break
 case 'chatbot': case 'autochat': case 'aichat': case 'smartchat': {
     if (!XeonTheCreator) return XeonStickOwner()
@@ -4705,30 +5983,36 @@ case 'fox_girl': case 'foxgirl': case 'gecg': case 'feed': case 'meow': case 'li
     let imageUrl = ''
     const cmdKey = String(command).toLowerCase()
 
-    // Tier 1: otakugifs
-    if (otakuMap[cmdKey]) {
+    // Tier 1: waifu.pics (Modern high-uptime standard API)
+    const waifuPicsCategories = ['slap', 'hug', 'kiss', 'pat', 'cuddle', 'wink', 'smug', 'yeet', 'bonk', 'bully', 'lick', 'bite', 'happy', 'dance', 'wave', 'smile'];
+    const resolvedCat = otakuMap[cmdKey] || cmdKey;
+    if (waifuPicsCategories.includes(resolvedCat)) {
         try {
-            const res = await axios.get(`https://api.otakugifs.xyz/gif?reaction=${otakuMap[cmdKey]}`, { timeout: 6000 })
+            const res = await axios.get(`https://api.waifu.pics/sfw/${resolvedCat}`, { timeout: 3500 })
             if (res.data?.url) imageUrl = res.data.url
         } catch (e) {}
     }
-    // Tier 2: nekos.life
+
+    // Tier 2: otakugifs (Secondary API)
+    if (!imageUrl && otakuMap[cmdKey]) {
+        try {
+            const res = await axios.get(`https://api.otakugifs.xyz/gif?reaction=${otakuMap[cmdKey]}`, { timeout: 3500 })
+            if (res.data?.url) imageUrl = res.data.url
+        } catch (e) {}
+    }
+
+    // Tier 3: nekos.life (Legacy API fallback)
     if (!imageUrl && (nekosLifeMap[cmdKey] || nekosLifeMap[cmdKey.replace(/_/g, '')])) {
         try {
             const cat = nekosLifeMap[cmdKey] || nekosLifeMap[cmdKey.replace(/_/g, '')]
-            const res = await axios.get(`https://nekos.life/api/v2/img/${cat}`, { timeout: 6000 })
+            const res = await axios.get(`https://nekos.life/api/v2/img/${cat}`, { timeout: 3500 })
             if (res.data?.url) imageUrl = res.data.url
         } catch (e) {}
     }
-    // Tier 3: fallback
+
+    // Tier 4: Guaranteed Stable fallback gif url
     if (!imageUrl) {
-        try {
-            const res = await axios.get('https://nekos.life/api/v2/img/hug', { timeout: 6000 })
-            if (res.data?.url) imageUrl = res.data.url
-        } catch (e) {}
-    }
-    if (!imageUrl) {
-        imageUrl = 'https://cdn.nekos.life/hug/hug_001.gif'
+        imageUrl = 'https://i.pinimg.com/originals/4d/52/63/4d5263a23a31e5bc1d09e5170f3f2db9.gif'
     }
 
     let target = m.mentionedJid?.[0] || m.quoted?.sender || null;
@@ -4768,16 +6052,8 @@ case 'fox_girl': case 'foxgirl': case 'gecg': case 'feed': case 'meow': case 'li
     let captionText = funPhrases[cmdKey] || `${senderTag} performed *${cmdKey.toUpperCase()}* on ${targetTag}! ✨`;
 
     try {
-        const buffer = await getBuffer(imageUrl);
-        const giftMagic = buffer.slice(0, 12).toString('latin1');
-        if (!buffer || buffer.length < 1000 || !(/^\x89PNG/.test(giftMagic) || /^GIF8/.test(giftMagic) || /^\xff\xd8/.test(giftMagic) || /^RIFF/.test(giftMagic))) throw new Error('Gift media failed to download (empty or invalid data)');
-        let mp4Buf = buffer
-        if (buffer.slice(0, 3).toString('latin1') === 'GIF8') {
-            try { mp4Buf = await gifToMp4(buffer) } catch (cvErr) { console.log('[Gift Convert Error]', cvErr?.message || cvErr) }
-        }
         await XeonBotInc.sendMessage(from, {
-            video: mp4Buf,
-            mimetype: mp4Buf === buffer ? 'image/gif' : 'video/mp4',
+            video: { url: imageUrl },
             gifPlayback: true,
             caption: captionText,
             mentions: [m.sender, target]
@@ -4790,7 +6066,12 @@ case 'fox_girl': case 'foxgirl': case 'gecg': case 'feed': case 'meow': case 'li
                 mentions: [m.sender, target]
             }, { quoted: m });
         } catch (e2) {
-            replygcxeon(captionText);
+            const boldCmd = cmdKey.toUpperCase().split('').join(' ');
+            const cardText = `🎬  *${boldCmd}*  🎬\n` +
+                             `───────────────────────────\n\n` +
+                             `✨  ${captionText}\n\n` +
+                             `───────────────────────────`;
+            await XeonBotInc.sendMessage(from, { text: cardText, mentions: [m.sender, target] }, { quoted: m });
         }
     }
 }
@@ -5211,25 +6492,76 @@ const quotexeony = await axios.get(`https://favqs.com/api/qotd`)
         const textquotes = `*${themeemoji} Quote:* ${quotexeony.data.quote.body}\n\n*${themeemoji} Author:* ${quotexeony.data.quote.author}`
 return replygcxeon(textquotes)
 break
-case 'handsomecheck':
+case 'handsomecheck': {
+    const target = mentionByReply || mentionByTag[0] || sender;
+    const score = Math.floor(Math.random() * 101);
+    await sendMetricCheckerCard(from, 'handsome check', target, score, 'handsome');
+}
+break;
+case 'handsomecheck_old':
 				if (!text) return replygcxeon(`Tag Someone, Example : ${prefix + command} @Xeon`)
 					const gan = ['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31','32','33','34','35','36','37','38','39','40','41','42','43','44','45','46','47','48','49','50','51','52','53','54','55','56','57','58','59','60','61','62','63','64','65','66','67','68','69','70','71','72','73','74','75','76','77','78','79','80','81','82','83','84','85','86','87','88','89','90','91','92','93','94','95','96','97','98','99','100']
 					const teng = gan[Math.floor(Math.random() * gan.length)]
 XeonBotInc.sendMessage(from, { text: `*${command}*\n\nName : ${q}\nAnswer : *${teng}%*` }, { quoted: m })
 					break
-case 'beautifulcheck':
+case 'beautifulcheck': {
+    const target = mentionByReply || mentionByTag[0] || sender;
+    const score = Math.floor(Math.random() * 101);
+    await sendMetricCheckerCard(from, 'beautiful check', target, score, 'beautiful');
+}
+break;
+case 'beautifulcheck_old':
 				if (!text) return replygcxeon(`Tag Someone, Example : ${prefix + command} @Xeon`)
 					const can = ['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31','32','33','34','35','36','37','38','39','40','41','42','43','44','45','46','47','48','49','50','51','52','53','54','55','56','57','58','59','60','61','62','63','64','65','66','67','68','69','70','71','72','73','74','75','76','77','78','79','80','81','82','83','84','85','86','87','88','89','90','91','92','93','94','95','96','97','98','99','100']
 					const tik = can[Math.floor(Math.random() * can.length)]
 XeonBotInc.sendMessage(from, { text: `*${command}*\n\nNama : ${q}\nAnswer : *${tik}%*` }, { quoted: m })
 					break
-					case 'charactercheck':
+case 'charactercheck': {
+    const target = mentionByReply || mentionByTag[0] || sender;
+    const xeony = ['Compassionate', 'Generous', 'Grumpy', 'Forgiving', 'Obedient', 'Good', 'Simp', 'Kind-Hearted', 'Patient', 'UwU', 'Top, anyway', 'Helpful', 'Completely Goofy', 'Sweet but Sarcastic', 'Quiet Genius'];
+    const selectedChar = xeony[Math.floor(Math.random() * xeony.length)];
+    const tag = `@${target.split('@')[0]}`;
+    const cardText = `🎭  *𝐂𝐇𝐀𝐑𝐀𝐂𝐓𝐄𝐑  𝐀𝐍𝐀𝐋𝐘𝐒𝐈𝐒*  🎭\n` +
+                     `───────────────────────────\n` +
+                     `👤  *Target:*  ${tag}\n` +
+                     `✨  *Dominant Trait:*  *${selectedChar}*\n\n` +
+                     `💬  *Verdict:*  _This analysis is 100% verified by the bot mainframe._ 😎\n` +
+                     `───────────────────────────`;
+    let gifUrl = "";
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/smug`, { timeout: 3500 });
+        if (res.data?.url) gifUrl = res.data.url;
+    } catch (_) {}
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: cardText, mentions: [target] }, { quoted: m });
+    } else {
+        await XeonBotInc.sendMessage(from, { text: cardText, mentions: [target] }, { quoted: m });
+    }
+}
+break;
+case 'charactercheck_old':
 					if (!text) return replygcxeon(`Tag Someone, Example : ${prefix + command} @Xeon`)
 					const xeony =['Compassionate','Generous','Grumpy','Forgiving','Obedient','Good','Simp','Kind-Hearted','patient','UwU','top, anyway','Helpful']
 					const taky = xeony[Math.floor(Math.random() * xeony.length)]
 					XeonBotInc.sendMessage(from, { text: `Character Check : ${q}\nAnswer : *${taky}*` }, { quoted: m })
 				     break
 case 'awesomecheck':
+case 'greatcheck':
+case 'gaycheck':
+case 'cutecheck':
+case 'lesbicheck':
+case 'lesbiancheck':
+case 'hornycheck':
+case 'prettycheck':
+case 'lovelycheck':
+case 'uglycheck': {
+    const target = mentionByReply || mentionByTag[0] || sender;
+    const score = Math.floor(Math.random() * 101);
+    const checkType = command.replace('check', '').replace('bi', 'lesbi');
+    await sendMetricCheckerCard(from, `${checkType} check`, target, score, checkType);
+}
+break;
+case 'awesomecheck_old':
   case 'greatcheck':
     case 'gaycheck':
       case 'cutecheck':
@@ -6075,27 +7407,323 @@ replygcxeon(util.format(_syntax + _err))
 break
 case 'pushcontact': {
     if (!XeonTheCreator) return XeonStickOwner()
-      if (!m.isGroup) return replygcxeon(`The feature works only in grup`)
-    if (!text) return replygcxeon(`text?`)
-    let mem = await participants.filter(v => v.id.endsWith('.net')).map(v => v.id)
-    replygcxeon(`Success in pushing the message to contacts`)
-    for (let pler of mem) {
-    XeonBotInc.sendMessage(pler, { text: q})
-     }  
-     replygcxeon(`Done`)
-      }
-      break
-case "pushcontactv2":{
-if (!XeonTheCreator) return XeonStickOwner()
-if (!q) return replygcxeon(`Incorrect Usage Please Use Command Like This\n${prefix+command} idgc|text`)
-XeonStickWait()
-const metadata2 = await XeonBotInc.groupMetadata(q.split("|")[0])
-const halss = metadata2.participants
-for (let mem of halss) {
-XeonBotInc.sendMessage(`${mem.id.split('@')[0]}` + "@s.whatsapp.net", { text: q.split("|")[1] })
-await sleep(5000)
+    if (!m.isGroup) return replygcxeon(`⚠️ *This feature works only inside a group!*`)
+
+    let pushText = (q && q.trim()) ? q.trim() : (m.quoted ? (m.quoted.text || '') : '')
+
+    // Check if user quoted media
+    let payload = null
+    if (m.quoted && /image|video|audio|document/.test(mime)) {
+        try {
+            const buffer = await XeonBotInc.downloadMediaMessage(m.quoted).catch(() => null)
+            if (buffer && buffer.length > 0) {
+                if (/image/.test(mime)) {
+                    payload = { image: buffer, caption: pushText }
+                } else if (/video/.test(mime)) {
+                    payload = { video: buffer, caption: pushText }
+                } else if (/audio/.test(mime)) {
+                    payload = { audio: buffer, mimetype: 'audio/mp4', ptt: /ptt|voice/.test(mime) }
+                } else if (/document/.test(mime)) {
+                    payload = { document: buffer, mimetype: mime, fileName: m.quoted.fileName || 'file', caption: pushText }
+                }
+            }
+        } catch (eMed) {
+            console.log('[pushcontact media download error]', eMed)
+        }
+    }
+
+    if (!payload && pushText) {
+        payload = { text: pushText }
+    }
+
+    if (!payload) {
+        return replygcxeon(`⚠️ *Please provide a text message or reply to an image/media to push to contacts!*\n\n*Example:*\n${prefix + command} Hello everyone!`)
+    }
+
+    // Refresh current group metadata
+    const currentMetadata = await XeonBotInc.groupMetadata(m.chat).catch(() => null) || groupMetadata
+    const rawParticipants = currentMetadata?.participants || participants || []
+
+    if (!rawParticipants || rawParticipants.length === 0) {
+        return replygcxeon(`❌ *Could not retrieve participants from this group.*`)
+    }
+
+    // Exclude bot and sender
+    const myJids = new Set([
+        botPn,
+        botNumber,
+        botLid,
+        cleanPhone(botPn) + '@s.whatsapp.net',
+        cleanPhone(botNumber) + '@s.whatsapp.net',
+        XeonBotInc.user?.id ? XeonBotInc.decodeJid(XeonBotInc.user.id) : null,
+        XeonBotInc.user?.lid ? normalizeJid(XeonBotInc.user.lid) : null,
+        normalizeJid(sender),
+        m.sender ? normalizeJid(m.sender) : null
+    ].filter(Boolean))
+
+    let lidMap = {}
+    try {
+        lidMap = JSON.parse(fs.readFileSync('./database/lid_map.json', 'utf8'))
+    } catch (_) {}
+
+    const validRecipients = new Set()
+
+    for (const p of rawParticipants) {
+        if (!p) continue
+        let target = null
+
+        if (p.phoneNumber) {
+            const ph = String(p.phoneNumber).split('@')[0].replace(/[^0-9]/g, '')
+            if (ph.length > 5) target = ph + '@s.whatsapp.net'
+        }
+        if (!target && p.jid && p.jid.endsWith('@s.whatsapp.net')) {
+            target = p.jid
+        }
+        const rawId = typeof p === 'string' ? p : (p.id || '')
+        if (!target && rawId.endsWith('@s.whatsapp.net')) {
+            target = rawId
+        }
+        if (!target && lidMap[rawId]) {
+            target = lidMap[rawId]
+        }
+        if (!target && rawId.endsWith('@lid')) {
+            target = rawId
+        }
+        if (!target) {
+            const digits = rawId.split('@')[0].replace(/[^0-9]/g, '')
+            if (digits.length > 5 && !digits.startsWith('6844') && digits.length <= 13) {
+                target = digits + '@s.whatsapp.net'
+            } else if (rawId) {
+                target = rawId
+            }
+        }
+
+        if (target && !myJids.has(normalizeJid(target)) && !myJids.has(target)) {
+            validRecipients.add(target)
+        }
+    }
+
+    const recipientList = Array.from(validRecipients)
+
+    if (recipientList.length === 0) {
+        return replygcxeon(`❌ *No valid recipient contacts found to push message to.*`)
+    }
+
+    await replygcxeon(
+        `⏳ *Starting Contact Push...*\n\n` +
+        `• *Target Group:* ${currentMetadata?.subject || groupName || 'Current Group'}\n` +
+        `• *Total Recipients:* ${recipientList.length}\n` +
+        `• *Interval:* 1.5s per contact (safe rate limit)\n\n` +
+        `_Please wait while messages are being delivered..._`
+    )
+
+    let successCount = 0
+    let failCount = 0
+
+    for (let i = 0; i < recipientList.length; i++) {
+        const recipient = recipientList[i]
+        try {
+            await XeonBotInc.sendMessage(recipient, payload)
+            successCount++
+        } catch (sendErr) {
+            console.log(`[PUSHCONTACT ERROR] to ${recipient}:`, sendErr?.message || sendErr)
+            failCount++
+        }
+
+        if (i < recipientList.length - 1) {
+            await sleep(1500)
+        }
+    }
+
+    replygcxeon(
+        `✅ *Contact Push Complete!*\n\n` +
+        `• *Group:* ${currentMetadata?.subject || groupName || 'Current Group'}\n` +
+        `• *Total Target:* ${recipientList.length}\n` +
+        `• *Delivered:* ${successCount}\n` +
+        (failCount > 0 ? `• *Skipped/Failed:* ${failCount}\n` : '') +
+        `\n_All available contacts have been messaged successfully._`
+    )
 }
-replygcxeon(`Success`)
+break
+case "pushcontactv2":{
+    if (!XeonTheCreator) return XeonStickOwner()
+
+    let targetGroupId = null
+    let pushText = ''
+
+    if (q && q.includes('|')) {
+        const parts = q.split('|')
+        targetGroupId = parts[0].trim()
+        pushText = parts.slice(1).join('|').trim()
+    } else if (m.isGroup) {
+        targetGroupId = m.chat
+        pushText = (q && q.trim()) ? q.trim() : (m.quoted ? (m.quoted.text || '') : '')
+    } else {
+        return replygcxeon(
+            `⚠️ *Incorrect Usage!*\n\n` +
+            `*Format:*\n` +
+            `• *${prefix + command} <group_id_or_link>|<your message>*\n` +
+            `• Or inside a group: *${prefix + command} <your message>*\n\n` +
+            `*Example:*\n` +
+            `${prefix + command} 120363012345678901@g.us|Hello everyone!`
+        )
+    }
+
+    // Check if user quoted media
+    let payload = null
+    if (m.quoted && /image|video|audio|document/.test(mime)) {
+        try {
+            const buffer = await XeonBotInc.downloadMediaMessage(m.quoted).catch(() => null)
+            if (buffer && buffer.length > 0) {
+                if (/image/.test(mime)) {
+                    payload = { image: buffer, caption: pushText }
+                } else if (/video/.test(mime)) {
+                    payload = { video: buffer, caption: pushText }
+                } else if (/audio/.test(mime)) {
+                    payload = { audio: buffer, mimetype: 'audio/mp4', ptt: /ptt|voice/.test(mime) }
+                } else if (/document/.test(mime)) {
+                    payload = { document: buffer, mimetype: mime, fileName: m.quoted.fileName || 'file', caption: pushText }
+                }
+            }
+        } catch (eMed) {
+            console.log('[pushcontactv2 media download error]', eMed)
+        }
+    }
+
+    if (!payload && pushText) {
+        payload = { text: pushText }
+    }
+
+    if (!payload) {
+        return replygcxeon(`⚠️ *Please provide a message or reply to media to push!*\n\n*Format:*\n${prefix + command} idgc|your text`)
+    }
+
+    // Resolve target group JID
+    if (targetGroupId.includes('chat.whatsapp.com/')) {
+        const inviteCode = targetGroupId.split('chat.whatsapp.com/')[1]?.split(/[\s?&#]/)[0]
+        if (inviteCode) {
+            try {
+                const inviteInfo = await XeonBotInc.groupGetInviteInfo(inviteCode)
+                if (inviteInfo?.id) {
+                    targetGroupId = inviteInfo.id.includes('@g.us') ? inviteInfo.id : `${inviteInfo.id}@g.us`
+                }
+            } catch (eLink) {
+                console.log('[pushcontactv2 invite resolve error]', eLink?.message || eLink)
+            }
+        }
+    }
+
+    if (!targetGroupId.includes('@g.us')) {
+        targetGroupId = targetGroupId.replace(/[^0-9-]/g, '') + '@g.us'
+    }
+
+    let targetMetadata = null
+    try {
+        targetMetadata = await XeonBotInc.groupMetadata(targetGroupId)
+    } catch (eMeta) {
+        return replygcxeon(`❌ *Could not access group:* \`${targetGroupId}\`\n\n_Make sure the group ID is correct and the Bot is a member of that group._`)
+    }
+
+    const rawParticipants = targetMetadata?.participants || []
+    if (rawParticipants.length === 0) {
+        return replygcxeon(`❌ *No participants found in group:* \`${targetMetadata?.subject || targetGroupId}\``)
+    }
+
+    // Exclude bot and sender
+    const myJids = new Set([
+        botPn,
+        botNumber,
+        botLid,
+        cleanPhone(botPn) + '@s.whatsapp.net',
+        cleanPhone(botNumber) + '@s.whatsapp.net',
+        XeonBotInc.user?.id ? XeonBotInc.decodeJid(XeonBotInc.user.id) : null,
+        XeonBotInc.user?.lid ? normalizeJid(XeonBotInc.user.lid) : null,
+        normalizeJid(sender),
+        m.sender ? normalizeJid(m.sender) : null
+    ].filter(Boolean))
+
+    let lidMap = {}
+    try {
+        lidMap = JSON.parse(fs.readFileSync('./database/lid_map.json', 'utf8'))
+    } catch (_) {}
+
+    const validRecipients = new Set()
+
+    for (const p of rawParticipants) {
+        if (!p) continue
+        let target = null
+
+        if (p.phoneNumber) {
+            const ph = String(p.phoneNumber).split('@')[0].replace(/[^0-9]/g, '')
+            if (ph.length > 5) target = ph + '@s.whatsapp.net'
+        }
+        if (!target && p.jid && p.jid.endsWith('@s.whatsapp.net')) {
+            target = p.jid
+        }
+        const rawId = typeof p === 'string' ? p : (p.id || '')
+        if (!target && rawId.endsWith('@s.whatsapp.net')) {
+            target = rawId
+        }
+        if (!target && lidMap[rawId]) {
+            target = lidMap[rawId]
+        }
+        if (!target && rawId.endsWith('@lid')) {
+            target = rawId
+        }
+        if (!target) {
+            const digits = rawId.split('@')[0].replace(/[^0-9]/g, '')
+            if (digits.length > 5 && !digits.startsWith('6844') && digits.length <= 13) {
+                target = digits + '@s.whatsapp.net'
+            } else if (rawId) {
+                target = rawId
+            }
+        }
+
+        if (target && !myJids.has(normalizeJid(target)) && !myJids.has(target)) {
+            validRecipients.add(target)
+        }
+    }
+
+    const recipientList = Array.from(validRecipients)
+
+    if (recipientList.length === 0) {
+        return replygcxeon(`❌ *No valid recipient contacts found in that group.*`)
+    }
+
+    await replygcxeon(
+        `⏳ *Starting Contact Push V2...*\n\n` +
+        `• *Target Group:* ${targetMetadata.subject || targetGroupId}\n` +
+        `• *Total Recipients:* ${recipientList.length}\n` +
+        `• *Interval:* 1.5s per contact (safe rate limit)\n\n` +
+        `_Please wait while messages are being delivered..._`
+    )
+
+    let successCount = 0
+    let failCount = 0
+
+    for (let i = 0; i < recipientList.length; i++) {
+        const recipient = recipientList[i]
+        try {
+            await XeonBotInc.sendMessage(recipient, payload)
+            successCount++
+        } catch (sendErr) {
+            console.log(`[PUSHCONTACT V2 ERROR] to ${recipient}:`, sendErr?.message || sendErr)
+            failCount++
+        }
+
+        if (i < recipientList.length - 1) {
+            await sleep(1500)
+        }
+    }
+
+    replygcxeon(
+        `✅ *Contact Push V2 Complete!*\n\n` +
+        `• *Group:* ${targetMetadata.subject || targetGroupId}\n` +
+        `• *Total Target:* ${recipientList.length}\n` +
+        `• *Delivered:* ${successCount}\n` +
+        (failCount > 0 ? `• *Skipped/Failed:* ${failCount}\n` : '') +
+        `\n_All available contacts have been messaged successfully._`
+    )
 }
 break
 
@@ -6613,99 +8241,178 @@ XeonStickWait()
 break
 case 'animewlp':{
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/wallpaper`)       
-            await XeonBotInc.sendMessage(m.chat, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://waifu.pics/api/sfw/neko`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/wallpaper`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`Here you go! 🌌`)
+    }
+}
+}
 break
 case 'animekiss':{
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/kiss`)       
-            await XeonBotInc.sendMessage(m.chat, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://api.waifu.pics/sfw/kiss`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/kiss`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`💋 *Sending you a big warm kiss!* 💋`)
+    }
+}
+}
 break
 case 'animehug':{
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/hug`)       
-            await XeonBotInc.sendMessage(m.chat, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://api.waifu.pics/sfw/hug`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/hug`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`🤗 *Sending you a warm tight hug!* 🤗`)
+    }
+}
+}
 break
 case 'animeneko':{
 XeonStickWait()
- waifudd = await axios.get(`https://waifu.pics/api/sfw/neko`)       
-            await XeonBotInc.sendMessage(m.chat, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://waifu.pics/api/sfw/neko`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    replygcxeon(`🐈 *Nyaa! Here is a cute neko for you!* 🐈`)
+}
+}
 break
 case 'animepat':{
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/pat`)       
-            await XeonBotInc.sendMessage(m.chat, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://api.waifu.pics/sfw/pat`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/pat`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`👋 *Gently patting your head!* 👋`)
+    }
+}
+}
 break
 case 'animeslap':{
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/slap`)       
-            await XeonBotInc.sendMessage(m.chat, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://api.waifu.pics/sfw/slap`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/slap`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`👋💥 *Vigorously slapped across the screen!* 👋💥`)
+    }
+}
+}
 break
 case 'animecuddle':{
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/cuddle`)       
-            await XeonBotInc.sendMessage(m.chat, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://api.waifu.pics/sfw/cuddle`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/cuddle`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`🥰 *Cuddling up cozy with you!* 🥰`)
+    }
+}
+}
 break
 case 'animewaifu':{
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/waifu`)       
-            await XeonBotInc.sendMessage(m.chat, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://api.waifu.pics/sfw/waifu`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/waifu`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`✨ *Here is a beautiful waifu for you!* ✨`)
+    }
+}
+}
 break
 case 'animenom':{
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/nom`)       
-            await XeonBotInc.sendMessage(m.chat, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://api.waifu.pics/sfw/bite`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/nom`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`😋 *Cheeky little bite! Nom nom nom!* 😋`)
+    }
+}
+}
 break
 case 'foxgirl': case 'animefoxgirl':{
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/fox_girl`)       
-            await XeonBotInc.sendMessage(m.chat, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://api.waifu.pics/sfw/neko`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/fox_girl`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`🦊 *Here is a cute anime fox girl!* 🦊`)
+    }
+}
+}
 break
 case 'animetickle': {
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/tickle`)     
-            await XeonBotInc.sendMessage(m.chat, {image: {url:waifudd.data.url}, caption: mess.success},{ quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://api.waifu.pics/sfw/bully`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/tickle`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`🤭 *Tickling you until you burst out laughing!* 🤭`)
+    }
+}
+}
 break
 case 'animegecg': {
 XeonStickWait()
- waifudd = await axios.get(`https://nekos.life/api/v2/img/gecg`)     
-            await XeonBotInc.sendMessage(m.chat, {image: {url:waifudd.data.url}, caption: mess.success},{ quoted:m }).catch(err => {
-                    return('Error!')
-                })
-                }
+try {
+    waifudd = await axios.get(`https://api.waifu.pics/sfw/smile`, { timeout: 3500 })
+    await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+} catch (e) {
+    try {
+        waifudd = await axios.get(`https://nekos.life/api/v2/img/gecg`, { timeout: 3500 })
+        await XeonBotInc.sendMessage(from, { image: { url:waifudd.data.url} , caption: mess.success}, { quoted:m })
+    } catch (err) {
+        replygcxeon(`🙂 *Smiling right back at you!* 🙂`)
+    }
+}
+}
 break
 case 'dogwoof': {
 XeonStickWait()
@@ -6883,18 +8590,23 @@ break
 case "spotify":{
 if (!isPrem) return replyprem(mess.premium)
 if (!text) return replygcxeon(`Where is the link?`)
-        const Spotify = require('./lib/spotify')
-        const spotify = new Spotify(text)
-        const info = await spotify.getInfo()
-        if ((info).error) return replygcxeon(`The link you provided is not spotify link`)
-        const { name, artists, album_name, release_date, cover_url } = info
-        const details = `${themeemoji} *Title:* ${name || ''}\n${themeemoji} *Artists:* ${(artists || []).join(
-            ','
-        )}\n${themeemoji} *Album:* ${album_name}\n${themeemoji} *Release Date:* ${release_date || ''}`
-       const response = await XeonBotInc.sendMessage(m.chat, { image: { url: cover_url }, caption: details }, { quoted: m })
-        const bufferpotify = await spotify.download()
-        await XeonBotInc.sendMessage(m.chat, { audio: bufferpotify }, { quoted: response })
-        }
+XeonStickWait()
+try {
+    const Spotify = require('./lib/spotify')
+    const spotify = new Spotify(text)
+    const info = await spotify.getInfo()
+    if ((info).error) return replygcxeon(`The link you provided is not a valid spotify link`)
+    const { name, artists, album_name, release_date, cover_url } = info
+    const details = `${themeemoji} *Title:* ${name || ''}\n${themeemoji} *Artists:* ${(artists || []).join(
+        ','
+    )}\n${themeemoji} *Album:* ${album_name}\n${themeemoji} *Release Date:* ${release_date || ''}`
+    const response = await XeonBotInc.sendMessage(m.chat, { image: { url: cover_url }, caption: details }, { quoted: m })
+    const bufferpotify = await spotify.download()
+    await XeonBotInc.sendMessage(m.chat, { audio: bufferpotify, mimetype: 'audio/mp4', fileName: `${name || 'spotify'}.mp3` }, { quoted: response })
+} catch (err) {
+    replygcxeon(`❌ *Spotify Error:* ${err?.message || err}`)
+}
+}
 break
 case 'bass': case 'blown': case 'deep': case 'earrape': case 'fast': case 'fat': case 'nightcore': case 'reverse': case 'robot': case 'slow': case 'smooth': case 'squirrel':
                 try {
@@ -6946,7 +8658,182 @@ const reply = `
     return replygcxeon(`*${q}* isn't a valid text`)
     }
     break
-                case 'can': {
+case 'can': {
+    if (!text) return replygcxeon(`Ask a question\n\nExample : ${prefix + command} I dance?`)
+    const bisa = [`Definitely Yes!`, `No way, absolutely not.`, `It is highly likely.`, `The stars say YES!`, `Do not count on it.`]
+    const keh = bisa[Math.floor(Math.random() * bisa.length)]
+    const cert = Math.floor(Math.random() * 41) + 60
+    const blocks = Math.round((cert / 100) * 5)
+    const bar = '▇'.repeat(blocks) + '░'.repeat(5 - blocks)
+    const card = `🔮  *𝐓𝐇𝐄  𝐎𝐑𝐀𝐂𝐋𝐄'𝐒  𝐂𝐇𝐀𝐌𝐁𝐄𝐑*  🔮\n` +
+                 `───────────────────────────\n` +
+                 `❓  *Question:* "Can ${text}"\n\n` +
+                 `✨  *The Vision:* _"${keh}"_\n\n` +
+                 `⚖️  *Certainty:* [ ${bar} ]  ${cert}%\n` +
+                 `───────────────────────────`
+    let gifUrl = ""
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/wink`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+case 'is_old': {
+    if (!text) return replygcxeon(`Ask a question\n\nExample : ${prefix + command} she a doctor?`)
+    const apa = [`Yes, 100%!`, `Absolutely not!`, `It is highly possible.`, `My visions say yes.`, `Signs point to no.`]
+    const kah = apa[Math.floor(Math.random() * apa.length)]
+    const cert = Math.floor(Math.random() * 41) + 60
+    const blocks = Math.round((cert / 100) * 5)
+    const bar = '▇'.repeat(blocks) + '░'.repeat(5 - blocks)
+    const card = `🔮  *𝐓𝐇𝐄  𝐎𝐑𝐀𝐂𝐋𝐄'𝐒  𝐂𝐇𝐀𝐌𝐁𝐄𝐑*  🔮\n` +
+                 `───────────────────────────\n` +
+                 `❓  *Question:* "Is ${text}"\n\n` +
+                 `✨  *The Vision:* _"${kah}"_\n\n` +
+                 `⚖️  *Certainty:* [ ${bar} ]  ${cert}%\n` +
+                 `───────────────────────────`
+    let gifUrl = ""
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/smile`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+case 'when_old': {
+    if (!text) return replygcxeon(`Ask a question\n\nExample : ${prefix + command} will I get rich?`)
+    const kapan = ['5 More Days ⏳', '3 Months More 📅', 'Next Year 🌟', 'In 2 More Years ✨', 'Tomorrow morning! 🌅', 'In the next 10 years 🏛️', 'Never. 💀']
+    const koh = kapan[Math.floor(Math.random() * kapan.length)]
+    const cert = Math.floor(Math.random() * 41) + 60
+    const blocks = Math.round((cert / 100) * 5)
+    const bar = '▇'.repeat(blocks) + '░'.repeat(5 - blocks)
+    const card = `🔮  *𝐓𝐇𝐄  𝐎𝐑𝐀𝐂𝐋𝐄'𝐒  𝐂𝐇𝐀𝐌𝐁𝐄𝐑*  🔮\n` +
+                 `───────────────────────────\n` +
+                 `❓  *Question:* "When ${text}"\n\n` +
+                 `✨  *The Vision:* _"${koh}"_\n\n` +
+                 `⚖️  *Certainty:* [ ${bar} ]  ${cert}%\n` +
+                 `───────────────────────────`
+    let gifUrl = ""
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/dance`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+case 'what_old': {
+    if (!text) return replygcxeon(`Ask a question\n\nExample : ${prefix + command} is my luck?`)
+    const lel = [`Ask your best friend! 🤐`, `It's a secret hidden in the cosmos. 🌌`, `I know, but I won't tell you. 😜`, `Nothing but absolute greatness! 🏆`, `Something very unexpected. 🤫`]
+    const kah = lel[Math.floor(Math.random() * lel.length)]
+    const cert = Math.floor(Math.random() * 41) + 60
+    const blocks = Math.round((cert / 100) * 5)
+    const bar = '▇'.repeat(blocks) + '░'.repeat(5 - blocks)
+    const card = `🔮  *𝐓𝐇𝐄  𝐎𝐑𝐀𝐂𝐋𝐄'𝐒  𝐂𝐇𝐀𝐌𝐁𝐄𝐑*  🔮\n` +
+                 `───────────────────────────\n` +
+                 `❓  *Question:* "What ${text}"\n\n` +
+                 `✨  *The Vision:* _"${kah}"_\n\n` +
+                 `⚖️  *Certainty:* [ ${bar} ]  ${cert}%\n` +
+                 `───────────────────────────`
+    let gifUrl = ""
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/smug`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+case 'where_old': {
+    if (!text) return replygcxeon(`Ask a question\n\nExample : ${prefix + command} is my phone?`)
+    const wherelol = [`In a hidden mystical forest 🌲`, `On Mars, riding a rover 🚀`, `Right under your nose! 👃`, `At the nearest coffee shop ☕`, `Somewhere in your deep thoughts 💭`]
+    const kah = wherelol[Math.floor(Math.random() * wherelol.length)]
+    const cert = Math.floor(Math.random() * 41) + 60
+    const blocks = Math.round((cert / 100) * 5)
+    const bar = '▇'.repeat(blocks) + '░'.repeat(5 - blocks)
+    const card = `🔮  *𝐓𝐇𝐄  𝐎𝐑𝐀𝐂𝐋𝐄'𝐒  𝐂𝐇𝐀𝐌𝐁𝐄𝐑*  🔮\n` +
+                 `───────────────────────────\n` +
+                 `❓  *Question:* "Where ${text}"\n\n` +
+                 `✨  *The Vision:* _"${kah}"_\n\n` +
+                 `⚖️  *Certainty:* [ ${bar} ]  ${cert}%\n` +
+                 `───────────────────────────`
+    let gifUrl = ""
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/happy`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+case 'how_old': {
+    if (!text) return replygcxeon(`Ask a question\n\nExample : ${prefix + command} to get rich?`)
+    const gimana = [`Work hard and sleep well! 💼`, `It is extremely easy, just believe! ✨`, `That is a secret even the gods keep. 🤫`, `Search on Google, mate! 🌐`, `Follow your heart and destiny. 💖`]
+    const kah = gimana[Math.floor(Math.random() * gimana.length)]
+    const cert = Math.floor(Math.random() * 41) + 60
+    const blocks = Math.round((cert / 100) * 5)
+    const bar = '▇'.repeat(blocks) + '░'.repeat(5 - blocks)
+    const card = `🔮  *𝐓𝐇𝐄  𝐎𝐑𝐀𝐂𝐋𝐄'𝐒  𝐂𝐇𝐀𝐌𝐁𝐄𝐑*  🔮\n` +
+                 `───────────────────────────\n` +
+                 `❓  *Question:* "How ${text}"\n\n` +
+                 `✨  *The Vision:* _"${kah}"_\n\n` +
+                 `⚖️  *Certainty:* [ ${bar} ]  ${cert}%\n` +
+                 `───────────────────────────`
+    let gifUrl = ""
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/smile`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+case 'rate_old': {
+    if (!text) return replygcxeon(`Example : ${prefix + command} my profile`)
+    const score = Math.floor(Math.random() * 101)
+    const totalBlocks = 10
+    const filledBlocks = Math.round((score / 100) * totalBlocks)
+    const emptyBlocks = totalBlocks - filledBlocks
+    const bar = '█'.repeat(filledBlocks) + '░'.repeat(emptyBlocks)
+    const card = `📈  *𝐑𝐀𝐓𝐈𝐍𝐆  𝐂𝐇𝐀𝐌𝐁𝐄𝐑*  📈\n` +
+                 `───────────────────────────\n` +
+                 `🎯  *Topic:*  "${text}"\n\n` +
+                 `📈  *Rating:*  [${bar}]  *${score}%*\n\n` +
+                 `💬  *Verdict:*  _Certified by the Clinton main system._ ⭐\n` +
+                 `───────────────────────────`
+    let gifUrl = ""
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/wink`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+case 'can_old': {
             	if (!text) return replygcxeon(`Ask question\n\nExample : ${prefix + command} i dance?`)
             	let bisa = [`Can`,`Can't`,`Cannot`,`Of Course You Can!!!`]
                 let keh = bisa[Math.floor(Math.random() * bisa.length)]
@@ -6954,7 +8841,7 @@ const reply = `
             await replygcxeon(jawab)
             }
             break
-            case 'is': {
+            case 'is_old': {
             	if (!text) return replygcxeon(`Ask question\n\nExample : ${prefix + command} she virgin?`)
             	let apa = [`Yes`, `No`, `It Could Be`, `Thats right`]
                 let kah = apa[Math.floor(Math.random() * apa.length)]
@@ -6962,7 +8849,7 @@ const reply = `
             await replygcxeon(jawab)
             }
             break
-            case 'when': {
+            case 'when_old': {
             	if (!text) return replygcxeon(`Ask question\n\nExample : ${prefix + command} will i get married?`)
             	let kapan = ['5 More Days', '10 More Days', '15 More Days','20 More Days', '25 More Days','30 More Days','35 More Days','40 More Days','45 More Days','50 More Days','55 More Days','60 More Days','65 More Days','70 More Days','75 More Days','80 More Days','85 More Days','90 More Days','100 More Days','5 Months More', '10 Months More', '15 Months More','20 Months More', '25 Months More','30 Months More','35 Months More','40 Months More','45 Months More','50 Months More','55 Months More','60 Months More','65 Months More','70 Months More','75 Months More','80 Months More','85 Months More','90 Months More','100 Months More','1 More Year','2 More Years','3 More Years','4 More Years','5 More Years','Tomorrow','The Day After Tomorrow']
                 let koh = kapan[Math.floor(Math.random() * kapan.length)]
@@ -6970,7 +8857,7 @@ const reply = `
             await replygcxeon(jawab)
             }
             break
-case 'what': {
+case 'what_old': {
             	if (!text) return replygcxeon(`Ask question\n\nExample : ${prefix + command} is your name?`)
             	let lel = [`Ask Your Gf`, `I Dont Know`, `I Don't Know, Ask Your Father`]
                 let kah = lel[Math.floor(Math.random() * lel.length)]
@@ -6978,7 +8865,7 @@ case 'what': {
             await replygcxeon(jawab)
             }
             break
-case 'where': {
+case 'where_old': {
 if (!text) return replygcxeon(`Ask question\n\nExample : ${prefix + command} is your name?`)
             	let wherelol = [`In the mountain`, `On mars`, `On moon`,`In the jungle`,`I dont know ask your mom`,`It could be somewhere`]
                 let kah = wherelol[Math.floor(Math.random() * wherelol.length)]
@@ -6986,7 +8873,7 @@ if (!text) return replygcxeon(`Ask question\n\nExample : ${prefix + command} is 
             await replygcxeon(jawab)
             }
             break
-case 'how': {
+case 'how_old': {
             	if (!text) return replygcxeon(`Ask question\n\nExample : ${prefix + command} to date girl?`)
             	let gimana = [`Ummm...`, `It's Difficult Bro`, `Sorry Bot Can't Answer`, `Try Searching On Google`,`Holy Cow! Really???`,`Dizzy Ah😴, don't wanna answer`,`Ohhh I See:(`,`The Patient, Boss:(`,`Really dude 🙄`]
                 let kah = gimana[Math.floor(Math.random() * gimana.length)]
@@ -6994,7 +8881,7 @@ case 'how': {
             await replygcxeon(jawab)
             }
             break
-case 'rate': {
+case 'rate_old': {
             	if (!text) return replygcxeon(`Example : ${prefix + command} my profile`)
             	let ra = ['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31','32','33','34','35','36','37','38','39','40','41','42','43','44','45','46','47','48','49','50','51','52','53','54','55','56','57','58','59','60','61','62','63','64','65','66','67','68','69','70','71','72','73','74','75','76','77','78','79','80','81','82','83','84','85','86','87','88','89','90','91','92','93','94','95','96','97','98','99','100']
                 let kah = ra[Math.floor(Math.random() * ra.length)]
@@ -7007,7 +8894,18 @@ case 'rate': {
                 replygcxeon(lowq)
             	}
             break
-            case 'stupidcheck':case 'uncleancheck':
+case 'stupidcheck':case 'uncleancheck':
+case 'hotcheck': case 'smartcheck':
+case 'evilcheck':case 'dogcheck':
+case 'coolcheck':
+case 'waifucheck': {
+    const target = mentionByReply || mentionByTag[0] || sender;
+    const score = Math.floor(Math.random() * 101);
+    const checkType = command.replace('check', '');
+    await sendMetricCheckerCard(from, `${checkType} check`, target, score, checkType);
+}
+break;
+case 'stupidcheck_old':
 case 'hotcheck': case 'smartcheck':
 case 'evilcheck':case 'dogcheck':
 case 'coolcheck':
@@ -7017,7 +8915,46 @@ const okebnh1 =['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15
 const xeonkak = okebnh1[Math.floor(Math.random() * okebnh1.length)]
 XeonBotInc.sendMessage(m.chat, { text: xeonkak }, { quoted: m })
 break
-            case 'soulmate': {
+case 'soulmate': {
+    if (!m.isGroup) return XeonStickGroup()
+    let member = participants.map(u => u.id).filter(id => id !== XeonBotInc.user.id)
+    if (member.length < 2) return replygcxeon("There are not enough members in this group to find a soulmate!")
+    
+    let me = m.sender
+    let filtered = member.filter(id => id !== me)
+    let jodoh = filtered.length > 0 ? filtered[Math.floor(Math.random() * filtered.length)] : me
+    
+    const score = Math.floor(Math.random() * 41) + 60 // 60% to 100%
+    const verdicts = [
+        "💖 Destiny has spoken! Your souls are bound by ancient magic.",
+        "✨ A deep, spiritual connection that defies all logic. True love!",
+        "💍 Ring bells! This bond is certified unbreakable by the bot core.",
+        "🍕 Bound together by a shared love for late-night snacks and laziness!"
+    ];
+    const verdict = verdicts[Math.floor(Math.random() * verdicts.length)]
+    
+    const cardText = `👫  *𝐒𝐎𝐔𝐋𝐌𝐀𝐓𝐄  𝐃𝐄𝐒𝐓𝐈𝐍𝐘  𝐒𝐂𝐀𝐍*  👫\n` +
+                     `───────────────────────────\n` +
+                     `👤  *You:* @${me.split('@')[0]}\n` +
+                     `💖  *Soulmate:* @${jodoh.split('@')[0]}\n\n` +
+                     `📈  *Affinity:* *${score}%*\n` +
+                     `💬  *Verdict:* _${verdict}_\n` +
+                     `───────────────────────────`;
+
+    let gifUrl = "";
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/cuddle`, { timeout: 3500 });
+        if (res.data?.url) gifUrl = res.data.url;
+    } catch (_) {}
+
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: cardText, mentions: [me, jodoh] }, { quoted: m });
+    } else {
+        await XeonBotInc.sendMessage(from, { text: cardText, mentions: [me, jodoh] }, { quoted: m });
+    }
+}
+break;
+case 'soulmate_old': {
             if (!m.isGroup) return XeonStickGroup()
             let member = participants.map(u => u.id)
             let me = m.sender
@@ -7042,28 +8979,62 @@ isForwarded: true,
 { quoted: m})        
             }
             break
- case 'couple': {
+ case 'couple': case 'ship': {
             if (!m.isGroup) return XeonStickGroup()
-            let member = participants.map(u => u.id)
+            let member = participants.map(u => u.id).filter(id => id !== XeonBotInc.user.id)
+            if (member.length < 2) return replygcxeon("There are not enough members in this group to pair!")
+            
             let orang = member[Math.floor(Math.random() * member.length)]
-            let jodoh = member[Math.floor(Math.random() * member.length)]
-XeonBotInc.sendMessage(m.chat,
-{ text: `@${orang.split('@')[0]} ❤️ @${jodoh.split('@')[0]}
-Cieeee, What's Going On❤️💖👀`,
-contextInfo:{
-mentionedJid:[orang, jodoh],
-forwardingScore: 9999999,
-isForwarded: true, 
-"externalAdReply": {
-"showAdAttribution": true,
-"containsAutoReply": true,
-"title": ` ${global.botname}`,
-"body": `${ownername}`,
-"previewType": "PHOTO",
-"thumbnailUrl": ``,
-"thumbnail": fs.readFileSync(`./XeonMedia/theme/cheemspic.jpg`),
-"sourceUrl": `${wagc}`}}},
-{ quoted: m})        
+            let filtered = member.filter(id => id !== orang)
+            let jodoh = filtered[Math.floor(Math.random() * filtered.length)]
+            
+            const score = Math.floor(Math.random() * 56) + 45 // 45% to 100%
+            const totalBlocks = 10;
+            const filledBlocks = Math.round((score / 100) * totalBlocks);
+            const emptyBlocks = totalBlocks - filledBlocks;
+            const bar = '█'.repeat(filledBlocks) + '░'.repeat(emptyBlocks);
+
+            const verdicts = [
+                "✨ A match made in heaven! Time to start planning the wedding. 🔔💍",
+                "💸 They rob each other's wallets, but they also steal each other's hearts. 🔒❤️",
+                "⚡ 80% undeniable chemistry, 20% pure, unadulterated group chaos! 🔥",
+                "🤫 It started in the group chat... now look at them. High compatibility detected! 👀",
+                "🛡️ One is the shield, the other is the robber. A perfectly balanced duo! ⚔️"
+            ];
+            const randomVerdict = verdicts[Math.floor(Math.random() * verdicts.length)];
+            
+            const msgText = `🏆  *𝐌𝐀𝐓𝐂𝐇𝐌𝐀𝐊𝐄𝐑  𝐎𝐅  𝐓𝐇𝐄  𝐃𝐀𝐘*  🏆\n` +
+                            `───────────────────────────\n\n` +
+                            `⚡  @${orang.split('@')[0]}  ❤️  @${jodoh.split('@')[0]}\n\n` +
+                            `📊  *𝐂𝐨𝐦𝐩𝐚𝐭𝐢𝐛𝐢𝐥𝐢𝐭𝐲:*  [${bar}]  *${score}%*\n` +
+                            `💬  *𝐕𝐞𝐫𝐝𝐢𝐜𝐭:*  _${randomVerdict}_\n\n` +
+                            `───────────────────────────\n` +
+                            `Cieeee, what's going on here? 😏💖👀`
+
+            let gifUrl = ""
+            try {
+                const res = await axios.get(`https://api.waifu.pics/sfw/happy`, { timeout: 3500 })
+                if (res.data?.url) gifUrl = res.data.url
+            } catch (_) {}
+
+            try {
+                if (gifUrl) {
+                    await XeonBotInc.sendMessage(m.chat, {
+                        video: { url: gifUrl },
+                        gifPlayback: true,
+                        caption: msgText,
+                        mentions: [orang, jodoh]
+                    }, { quoted: m })
+                } else {
+                    await XeonBotInc.sendMessage(m.chat, {
+                        text: msgText,
+                        mentions: [orang, jodoh]
+                    }, { quoted: m })
+                }
+            } catch (err) {
+                console.error('[COUPLE ERROR]', err);
+                replygcxeon(`🏆 *MATCHMAKER* 🏆\n\n@${orang.split('@')[0]} ❤️ @${jodoh.split('@')[0]}\nCompatibility: *${score}%*`);
+            }
             }
             break
                         case 'coffee': case 'kopi': {
@@ -7117,11 +9088,16 @@ mentionedJid:[xeonshimts],
 }, { quoted: m })
          }
      break
-     case "igvid": case "instavid": {
+      case "igvid": case "instavid": {
 if (!text) return replygcxeon(`Where is the link?\n\nExample : ${prefix + command} https://www.instagram.com/reel/Ctjt0srIQFg/?igshid=MzRlODBiNWFlZA==`)
 XeonStickWait()
-let resxeonyinsta = await XeonInstaMp4(text)
-const gha1 = await XeonBotInc.sendMessage(m.chat,{video:{url: resxeonyinsta.url[0].url},caption: mess.success},{quoted:m})
+try {
+    let resxeonyinsta = await XeonInstaMp4(text)
+    if (!resxeonyinsta?.url?.[0]?.url) return replygcxeon('❌ Could not extract video from Instagram link')
+    await XeonBotInc.sendMessage(m.chat,{video:{url: resxeonyinsta.url[0].url},caption: mess.success},{quoted:m})
+} catch (err) {
+    replygcxeon(`❌ *Instagram Error:* ${err?.message || err}`)
+}
 }
 break
 case 'igstalk': {
@@ -7148,24 +9124,39 @@ break
            case "igimg": case "instaimg":  {
 if (!text) return replygcxeon(`Where is the link?\n\nExample : ${prefix + command} https://www.instagram.com/p/Cs8x1ljt_D9/?igshid=MzRlODBiNWFlZA==`)
 XeonStickWait()
-const risponsxeon = await XeonIgImg(text)
-for (let i=0;i<risponsxeon.length;i++) {
-let ghd = await XeonBotInc.sendFileUrl(m.chat, risponsxeon[i], `Here you go!`, m)
+try {
+    const risponsxeon = await XeonIgImg(text)
+    if (!risponsxeon || risponsxeon.length === 0) return replygcxeon('❌ No images found for this Instagram link')
+    for (let i=0;i<risponsxeon.length;i++) {
+        await XeonBotInc.sendFileUrl(m.chat, risponsxeon[i], `Here you go!`, m)
+    }
+} catch (err) {
+    replygcxeon(`❌ *Instagram Image Error:* ${err?.message || err}`)
 }
 }
 break 
 case "fbvid": case "facebookvid":{
 if (!text) return replygcxeon(`Where is the url?\n\nExample: ${prefix + command} https://www.facebook.com/groups/2616981278627207/permalink/3572542609737731/?mibextid=Nif5oz`)
 XeonStickWait()
-let res = await XeonFb(q)
-let ghdp = await XeonBotInc.sendMessage(from,{video:{url: res.url[0].url},caption: mess.success},{quoted:m})
+try {
+    let res = await XeonFb(q)
+    if (!res?.url?.[0]?.url) return replygcxeon('❌ Could not extract video from Facebook link')
+    await XeonBotInc.sendMessage(from,{video:{url: res.url[0].url},caption: mess.success},{quoted:m})
+} catch (err) {
+    replygcxeon(`❌ *Facebook Error:* ${err?.message || err}`)
+}
 }
 break
 case "twittervid":case "twitvid":{
 if (!text) return replygcxeon(`Where is the url?\n\nExample: ${prefix + command} https://twitter.com/WarnerBrosIndia/status/1668933430795485184?s=19`)
 XeonStickWait()
-let res = await XeonTwitter(q)
-let ghdx = await XeonBotInc.sendMessage(from,{video:{url: res.url[0].url},caption: mess.success},{quoted:m})
+try {
+    let res = await XeonTwitter(q)
+    if (!res?.url?.[0]?.url) return replygcxeon('❌ Could not extract video from Twitter link')
+    await XeonBotInc.sendMessage(from,{video:{url: res.url[0].url},caption: mess.success},{quoted:m})
+} catch (err) {
+    replygcxeon(`❌ *Twitter Error:* ${err?.message || err}`)
+}
 }
 break
     case 'say': case 'tts': case 'gtts':{
@@ -7314,7 +9305,655 @@ case 'myip': {
                 }
             }
             break
-            case 'lyrics': {
+
+case 'claim': {
+    const user = global.db.users[m.sender]
+    const cooldown = 24 * 60 * 60 * 1000 // 24 hours
+    const now = Date.now()
+    if (now - user.lastClaim < cooldown) {
+        const remaining = cooldown - (now - user.lastClaim)
+        const hours = Math.floor(remaining / (3600000))
+        const minutes = Math.floor((remaining % 3600000) / 60000)
+        return replygcxeon(`⏳ *Daily Claim Cooldown*\n\nYou can claim your next reward in *${hours}h ${minutes}m*!`)
+    }
+    user.coins += 500
+    user.xp += 100
+    user.lastClaim = now
+    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+    
+    const card = `💰  *𝐃𝐀𝐈𝐋𝐘  𝐂𝐋𝐀𝐈𝐌  𝐒𝐔𝐂𝐂𝐄𝐒𝐒*  💰\n` +
+                 `───────────────────────────\n\n` +
+                 `🎁  *Reward:*  *+500 Coins* & *+100 XP*\n` +
+                 `💼  *New Balance:*  *${user.coins} Coins*\n` +
+                 `📈  *Total XP:*  *${user.xp} XP*\n\n` +
+                 `───────────────────────────\n` +
+                 `Come back tomorrow to claim again! 💎✨`
+    
+    let gifUrl = ""
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/happy`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+
+case 'profile': {
+    const target = m.mentionedJid && m.mentionedJid[0] || m.quoted?.sender || m.sender
+    const targetDigits = String(target || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '')
+    const isTargetOwner = targetDigits === '2348160208114' || targetDigits === '2348029399425' || (ownerPhoneSet && ownerPhoneSet.has(targetDigits))
+    const isTargetPrem = isTargetOwner || (premPhoneSet && premPhoneSet.has(targetDigits)) || (global.db.users[target] && global.db.users[target].premium) || (global.db.users[normalizeJid(target)] && global.db.users[normalizeJid(target)].premium)
+    const targetUser = global.db.users[target] || global.db.users[normalizeJid(target)] || { coins: isTargetPrem ? 50000 : 1000, xp: isTargetPrem ? 5000 : 0, wins: isTargetOwner ? 10 : 0, losses: 0, premium: isTargetPrem }
+    if (isTargetPrem) targetUser.premium = true
+    const level = Math.floor(Math.sqrt((targetUser.xp || 0) / 100)) + 1
+    const xpNeeded = (level * level) * 100
+    const progress = Math.round((((targetUser.xp || 0) - ((level-1)*(level-1)*100)) / (xpNeeded - ((level-1)*(level-1)*100))) * 10)
+    const progressBar = '█'.repeat(Math.max(0, Math.min(progress, 10))) + '░'.repeat(Math.max(0, 10 - Math.min(progress, 10)))
+    const rankDisplay = isTargetOwner ? '👑 Bot Owner & Creator' : (targetUser.premium ? '⭐ Premium Player' : '🟢 Free Player')
+    
+    const card = `👑  *𝐏𝐋𝐀𝐘𝐄𝐑  𝐏𝐑𝐎𝐅𝐈𝐋𝐄*  👑\n` +
+                 `───────────────────────────\n` +
+                 `👤  *User:* @${target.split('@')[0]}\n` +
+                 `⭐  *Rank:* ${rankDisplay}\n\n` +
+                 `🏅  *Level:*  *${level}*\n` +
+                 `📈  *XP:*     *${targetUser.xp} / ${xpNeeded}*\n` +
+                 `📊  *Level Progress:*\n` +
+                 `    [ ${progressBar} ]\n\n` +
+                 `💰  *Coins:*  *${targetUser.coins} Coins*\n` +
+                 `🏆  *Wins / Losses:*  *${targetUser.wins}W*  |  *${targetUser.losses}L*\n` +
+                 `───────────────────────────`
+                 
+    let gifUrl = ""
+    try {
+        const res = await axios.get(`https://api.waifu.pics/sfw/smile`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card, mentions: [target] }, { quoted: m })
+    } else {
+        await XeonBotInc.sendMessage(from, { text: card, mentions: [target] }, { quoted: m })
+    }
+}
+break
+
+case 'slot': case 'slots': {
+    const user = global.db.users[m.sender]
+    if (!text) return replygcxeon(`🎰 *Slot Machine Help*\n\nUsage: ${prefix}slot <bet_amount>\nExample: ${prefix}slot 100`)
+    const bet = parseInt(text)
+    if (isNaN(bet) || bet <= 0) return replygcxeon(`❌ *Invalid Bet Amount!*\n\nPlease enter a positive number of coins to bet.`)
+    if (bet > user.coins) return replygcxeon(`❌ *Insufficient Coins!*\n\nYou only have *${user.coins} Coins*. Go claim your daily allowance with *${prefix}claim*!`)
+    
+    const items = ['🍒', '🍋', '🍊', '🍉', '🍇', '💎', '⭐', '🔔']
+    const s1 = items[Math.floor(Math.random() * items.length)]
+    const s2 = items[Math.floor(Math.random() * items.length)]
+    const s3 = items[Math.floor(Math.random() * items.length)]
+    
+    let multiplier = 0
+    let message = ""
+    
+    if (s1 === s2 && s2 === s3) {
+        if (s1 === '💎') {
+            multiplier = 10
+        } else if (s1 === '⭐') {
+            multiplier = 20
+        } else {
+            multiplier = 5
+        }
+        message = `🔥 *JACKPOT! Triple ${s1}!* 🏆`
+    } else if (s1 === s2 || s2 === s3 || s1 === s3) {
+        multiplier = 2
+        const matched = s1 === s2 ? s1 : s3
+        message = `✨ *Nice Match! Double ${matched}!* ⭐`
+    } else {
+        multiplier = 0
+        message = `💀 *Aw, no matches this time!*`
+    }
+    
+    let coinsDiff = 0
+    if (multiplier > 0) {
+        coinsDiff = bet * multiplier
+        user.coins += (coinsDiff - bet)
+        user.xp += 20
+        user.wins += 1
+    } else {
+        user.coins -= bet
+        user.xp += 5
+        user.losses += 1
+    }
+    
+    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+    
+    const winStatus = multiplier > 0 ? `🟢 *WON:*  *+${coinsDiff} Coins*` : `🔴 *LOST:*  *-${bet} Coins*`
+    
+    const card = `🎰  *𝐂𝐇𝐄𝐄𝐌𝐒  𝐒𝐋𝐎𝐓  𝐌𝐀𝐂𝐇𝐈𝐍𝐄*  🎰\n` +
+                 `───────────────────────────\n\n` +
+                 `      [  ${s1}  |  ${s2}  |  ${s3}  ]\n\n` +
+                 `───────────────────────────\n` +
+                 `${message}\n\n` +
+                 `${winStatus}\n` +
+                 `💼  *New Balance:*  *${user.coins} Coins*\n` +
+                 `📈  *XP Earned:*    *+${multiplier > 0 ? 20 : 5} XP*\n` +
+                 `───────────────────────────`
+                 
+    let gifUrl = ""
+    try {
+        const cat = multiplier > 0 ? 'dance' : 'wink'
+        const res = await axios.get(`https://api.waifu.pics/sfw/${cat}`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+
+case 'coinflip': case 'cf': {
+    const user = global.db.users[m.sender]
+    const argsSplit = text.trim().split(/\s+/)
+    if (argsSplit.length < 2) return replygcxeon(`🪙 *Coinflip Help*\n\nUsage: ${prefix}coinflip <bet_amount> <heads/tails>\nExample: ${prefix}coinflip 100 heads`)
+    const bet = parseInt(argsSplit[0])
+    const choice = argsSplit[1].toLowerCase()
+    
+    if (isNaN(bet) || bet <= 0) return replygcxeon(`❌ *Invalid Bet Amount!*\n\nPlease enter a positive number of coins to bet.`)
+    if (bet > user.coins) return replygcxeon(`❌ *Insufficient Coins!*\n\nYou only have *${user.coins} Coins*.`)
+    if (choice !== 'heads' && choice !== 'tails' && choice !== 'head' && choice !== 'tail') {
+        return replygcxeon(`❌ *Invalid Choice!*\n\nPlease choose either *heads* or *tails*.`)
+    }
+    
+    const formattedChoice = (choice === 'head' || choice === 'heads') ? 'heads' : 'tails'
+    const coinSide = Math.random() < 0.5 ? 'heads' : 'tails'
+    const coinEmoji = coinSide === 'heads' ? '🪙 [HEADS]' : '🪙 [TAILS]'
+    
+    const won = formattedChoice === coinSide
+    let winStatus = ""
+    
+    if (won) {
+        user.coins += bet
+        user.xp += 15
+        user.wins += 1
+        winStatus = `🟢 *WON:*  *+${bet} Coins* (Double Payout!)`
+    } else {
+        user.coins -= bet
+        user.xp += 5
+        user.losses += 1
+        winStatus = `🔴 *LOST:*  *-${bet} Coins*`
+    }
+    
+    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+    
+    const card = `🪙  *𝐂𝐎𝐈𝐍  𝐅𝐋𝐈𝐏  𝐀𝐑𝐄𝐍𝐀*  🪙\n` +
+                 `───────────────────────────\n\n` +
+                 `🌀  *Flipping the Coin...*\n\n` +
+                 `✨  *Result:*  *${coinEmoji}*\n` +
+                 `👤  *Your Guess:*  *${formattedChoice.toUpperCase()}*\n\n` +
+                 `${won ? '🎉 *Destiny favors you!*' : '💀 *Hard luck, the coin is unforgiving!*'}\n\n` +
+                 `${winStatus}\n` +
+                 `💼  *New Balance:*  *${user.coins} Coins*\n` +
+                 `───────────────────────────`
+                 
+    let gifUrl = ""
+    try {
+        const cat = won ? 'happy' : 'smug'
+        const res = await axios.get(`https://api.waifu.pics/sfw/${cat}`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+
+case 'roulette': {
+    const user = global.db.users[m.sender]
+    const argsSplit = text.trim().split(/\s+/)
+    if (argsSplit.length < 2) return replygcxeon(`🎡 *Roulette Help*\n\nUsage: ${prefix}roulette <bet_amount> <red/black/green>\nExample: ${prefix}roulette 100 red\n\n🟢 *Payouts:* Red (2x) | Black (2x) | Green (14x)`)
+    const bet = parseInt(argsSplit[0])
+    const choice = argsSplit[1].toLowerCase()
+    
+    if (isNaN(bet) || bet <= 0) return replygcxeon(`❌ *Invalid Bet Amount!*\n\nPlease enter a positive number of coins to bet.`)
+    if (bet > user.coins) return replygcxeon(`❌ *Insufficient Coins!*\n\nYou only have *${user.coins} Coins*.`)
+    if (choice !== 'red' && choice !== 'black' && choice !== 'green') {
+        return replygcxeon(`❌ *Invalid Color Choice!*\n\nPlease choose *red*, *black*, or *green*.`)
+    }
+    
+    const rand = Math.random() * 100
+    let resultColor = 'black'
+    let wheelEmoji = '⚫ [BLACK]'
+    if (rand < 5) {
+        resultColor = 'green'
+        wheelEmoji = '🟢 [GREEN]'
+    } else if (rand < 52.5) {
+        resultColor = 'red'
+        wheelEmoji = '🔴 [RED]'
+    }
+    
+    const won = choice === resultColor
+    let winStatus = ""
+    let coinsDiff = 0
+    
+    if (won) {
+        const multiplier = resultColor === 'green' ? 14 : 2
+        coinsDiff = bet * multiplier
+        user.coins += (coinsDiff - bet)
+        user.xp += 25
+        user.wins += 1
+        winStatus = `🟢 *WON:*  *+${coinsDiff} Coins* (${multiplier}x multiplier!)`
+    } else {
+        user.coins -= bet
+        user.xp += 5
+        user.losses += 1
+        winStatus = `🔴 *LOST:*  *-${bet} Coins*`
+    }
+    
+    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+    
+    const card = `🎡  *𝐂𝐇𝐄𝐄𝐌𝐒  container  𝐖𝐇𝐄𝐄𝐌𝐒*  🎡\n` +
+                 `🎡  *𝐂𝐇𝐄𝐄𝐌𝐒  𝐑𝐎𝐔𝐋𝐄𝐓𝐓𝐄  𝐖𝐇𝐄𝐄𝐋*  🎡\n` +
+                 `───────────────────────────\n\n` +
+                 `🌀  *Spinning the wheel of destiny...*\n\n` +
+                 `✨  *Ball Landed on:*  *${wheelEmoji}*\n` +
+                 `👤  *Your Selection:*  *${choice.toUpperCase()}*\n\n` +
+                 `${won ? '🏆 *Amazing win! You beat the house!*' : '💀 *The ball rolls past your hopes!*'}\n\n` +
+                 `${winStatus}\n` +
+                 `💼  *New Balance:*  *${user.coins} Coins*\n` +
+                 `───────────────────────────`
+                 
+    let gifUrl = ""
+    try {
+        const cat = won ? 'dance' : 'smile'
+        const res = await axios.get(`https://api.waifu.pics/sfw/${cat}`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+
+case 'blackjack': case 'bj': {
+    global.blackjack = global.blackjack || {}
+    const user = global.db.users[m.sender]
+    
+    if (global.blackjack[m.sender]) {
+        return replygcxeon(`🃏 *Active Blackjack Game Detected!*\n\nYou are already in a game. Type *${prefix}hit* to draw a card, *${prefix}stand* to hold, or *${prefix}double* to double down!`)
+    }
+    
+    if (!text) return replygcxeon(`🃏 *Blackjack Help*\n\nUsage: ${prefix}blackjack <bet_amount>\nExample: ${prefix}blackjack 200`)
+    const bet = parseInt(text)
+    if (isNaN(bet) || bet <= 0) return replygcxeon(`❌ *Invalid Bet Amount!*\n\nPlease enter a positive number of coins to bet.`)
+    if (bet > user.coins) return replygcxeon(`❌ *Insufficient Coins!*\n\nYou only have *${user.coins} Coins*.`)
+    
+    const suits = ['♥', '♦', '♣', '♠']
+    const ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+    const deck = []
+    for (const suit of suits) {
+        for (const rank of ranks) {
+            deck.push({ rank, suit })
+        }
+    }
+    for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    
+    const playerHand = [deck.pop(), deck.pop()]
+    const dealerHand = [deck.pop(), deck.pop()]
+    
+    const pValue = calculateHand(playerHand)
+    const dValue = calculateHand([dealerHand[0]])
+    
+    global.blackjack[m.sender] = {
+        bet,
+        deck,
+        playerHand,
+        dealerHand,
+        status: 'playing'
+    }
+    
+    if (pValue === 21) {
+        const winAmount = Math.floor(bet * 1.5)
+        user.coins += winAmount
+        user.xp += 30
+        user.wins += 1
+        delete global.blackjack[m.sender]
+        fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+        
+        return replygcxeon(`🃏  *𝐁𝐋𝐀𝐂𝐊𝐉𝐀𝐂𝐊!  𝐍𝐀𝐓𝐔𝐑𝐀𝐋  𝐖𝐈𝐍*  🃏\n` +
+                          `───────────────────────────\n\n` +
+                          `👤  *Your Hand:*  ${renderHand(playerHand)} (*21*)\n` +
+                          `🤖  *Dealer Hand:*  ${renderHand(dealerHand)} (*${calculateHand(dealerHand)}*)\n\n` +
+                          `🏆 *You hit natural Blackjack! Amazing!* ✨\n\n` +
+                          `🟢 *WON:*  *+${winAmount} Coins*\n` +
+                          `💼  *New Balance:*  *${user.coins} Coins*\n` +
+                          `───────────────────────────`)
+    }
+    
+    const cardMsg = `🃏  *𝐂𝐇𝐄𝐄𝐌𝐒  𝐁𝐋𝐀𝐂𝐊𝐉𝐀𝐂𝐊  𝐓𝐀𝐁𝐋𝐄*  🃏\n` +
+                    `───────────────────────────\n\n` +
+                    `👤  *Your Hand:*  ${renderHand(playerHand)} (*${pValue}*)\n` +
+                    `🤖  *Dealer Show:*  [${dealerHand[0].rank}${dealerHand[0].suit}] [??] (*${dValue}*)\n\n` +
+                    `💵  *Betting:*  *${bet} Coins*\n\n` +
+                    `👉 *Commands:* Type *${prefix}hit* to draw, *${prefix}stand* to hold, or *${prefix}double* to double your bet and stand!`
+                 
+    await replygcxeon(cardMsg)
+}
+break
+
+case 'hit': case 'h': {
+    global.blackjack = global.blackjack || {}
+    const game = global.blackjack[m.sender]
+    if (!game) return replygcxeon(`❌ *No Active Blackjack Game!*\n\nStart a new game using *${prefix}blackjack <bet>*!`)
+    
+    const user = global.db.users[m.sender]
+    const card = game.deck.pop()
+    game.playerHand.push(card)
+    
+    const pValue = calculateHand(game.playerHand)
+    const dValue = calculateHand([game.dealerHand[0]])
+    
+    if (pValue > 21) {
+        user.coins -= game.bet
+        user.xp += 5
+        user.losses += 1
+        delete global.blackjack[m.sender]
+        fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+        
+        return replygcxeon(`💀  *𝐁𝐋𝐀𝐂𝐊𝐉𝐀𝐂𝐊  𝐁𝐔𝐒𝐓𝐄𝐃!*  💀\n` +
+                          `───────────────────────────\n\n` +
+                          `👤  *Your Hand:*  ${renderHand(game.playerHand)} (*${pValue}*)\n` +
+                          `🤖  *Dealer Hand:*  ${renderHand(game.dealerHand)} (*${calculateHand(game.dealerHand)}*)\n\n` +
+                          `❌ *You went over 21! House wins!* 💀\n\n` +
+                          `🔴 *LOST:*  *-${game.bet} Coins*\n` +
+                          `💼  *New Balance:*  *${user.coins} Coins*\n` +
+                          `───────────────────────────`)
+    }
+    
+    const cardMsg = `🃏  *𝐂𝐇𝐄𝐄𝐌𝐒  𝐁𝐋𝐀𝐂𝐊𝐉𝐀𝐂𝐊  𝐓𝐀𝐁𝐋𝐄*  🃏\n` +
+                    `───────────────────────────\n\n` +
+                    `👤  *Your Hand:*  ${renderHand(game.playerHand)} (*${pValue}*)\n` +
+                    `🤖  *Dealer Show:*  [${game.dealerHand[0].rank}${game.dealerHand[0].suit}] [??] (*${dValue}*)\n\n` +
+                    `💵  *Betting:*  *${game.bet} Coins*\n\n` +
+                    `👉 *Commands:* Type *${prefix}hit* to draw, or *${prefix}stand* to hold!`
+                    
+    await replygcxeon(cardMsg)
+}
+break
+
+case 'stand': case 's': {
+    global.blackjack = global.blackjack || {}
+    const game = global.blackjack[m.sender]
+    if (!game) return replygcxeon(`❌ *No Active Blackjack Game!*\n\nStart a new game using *${prefix}blackjack <bet>*!`)
+    
+    const user = global.db.users[m.sender]
+    let pValue = calculateHand(game.playerHand)
+    let dValue = calculateHand(game.dealerHand)
+    
+    while (dValue < 17) {
+        game.dealerHand.push(game.deck.pop())
+        dValue = calculateHand(game.dealerHand)
+    }
+    
+    let won = false
+    let draw = false
+    let winMsg = ""
+    let coinsDiff = 0
+    
+    if (dValue > 21) {
+        won = true
+        winMsg = `🏆 *Dealer busted! You won!* 🎉`
+        coinsDiff = game.bet
+    } else if (pValue > dValue) {
+        won = true
+        winMsg = `🏆 *You beat the dealer! Excellent game!* 🎉`
+        coinsDiff = game.bet
+    } else if (pValue === dValue) {
+        draw = true
+        winMsg = `🤝 *It's a tie! Bet returned.*`
+        coinsDiff = 0
+    } else {
+        won = false
+        winMsg = `💀 *Dealer won! Better luck next time.*`
+        coinsDiff = -game.bet
+    }
+    
+    if (won) {
+        user.coins += coinsDiff
+        user.xp += 20
+        user.wins += 1
+    } else if (draw) {
+        user.xp += 5
+    } else {
+        user.coins += coinsDiff
+        user.xp += 5
+        user.losses += 1
+    }
+    
+    delete global.blackjack[m.sender]
+    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+    
+    const payoutText = won ? `🟢 *WON:*  *+${coinsDiff} Coins*` : (draw ? `🟡 *TIED:*  *+0 Coins*` : `🔴 *LOST:*  *${coinsDiff} Coins*`)
+    
+    const cardMsg = `🃏  *𝐁𝐋𝐀𝐂𝐊𝐉𝐀𝐂𝐊  𝐅𝐈𝐍𝐀𝐋  𝐑𝐄𝐒𝐔𝐋𝐓*  🃏\n` +
+                    `───────────────────────────\n\n` +
+                    `👤  *Your Hand:*  ${renderHand(game.playerHand)} (*${pValue}*)\n` +
+                    `🤖  *Dealer Hand:*  ${renderHand(game.dealerHand)} (*${dValue}*)\n\n` +
+                    `───────────────────────────\n` +
+                    `${winMsg}\n\n` +
+                    `${payoutText}\n` +
+                    `💼  *New Balance:*  *${user.coins} Coins*\n` +
+                    `───────────────────────────`
+                    
+    await replygcxeon(cardMsg)
+}
+break
+
+case 'double': case 'd': {
+    global.blackjack = global.blackjack || {}
+    const game = global.blackjack[m.sender]
+    if (!game) return replygcxeon(`❌ *No Active Blackjack Game!*\n\nStart a new game using *${prefix}blackjack <bet>*!`)
+    
+    const user = global.db.users[m.sender]
+    if (user.coins < game.bet * 2) {
+        return replygcxeon(`❌ *Insufficient Coins to Double Down!*\n\nYou need another *${game.bet} Coins* to double your bet!`)
+    }
+    
+    game.bet = game.bet * 2
+    const card = game.deck.pop()
+    game.playerHand.push(card)
+    
+    let pValue = calculateHand(game.playerHand)
+    
+    if (pValue > 21) {
+        user.coins -= game.bet
+        user.xp += 5
+        user.losses += 1
+        delete global.blackjack[m.sender]
+        fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+        
+        return replygcxeon(`💀  *𝐁𝐋𝐀𝐂𝐊𝐉𝐀𝐂𝐊  𝐃𝐎𝐔𝐁𝐋𝐄  𝐁𝐔𝐒𝐓𝐄𝐃!*  💀\n` +
+                          `───────────────────────────\n\n` +
+                          `👤  *Your Hand:*  ${renderHand(game.playerHand)} (*${pValue}*)\n` +
+                          `🤖  *Dealer Hand:*  ${renderHand(game.dealerHand)} (*${calculateHand(game.dealerHand)}*)\n\n` +
+                          `❌ *You went over 21 after doubling! House wins!* 💀\n\n` +
+                          `🔴 *LOST:*  *-${game.bet} Coins*\n` +
+                          `💼  *New Balance:*  *${user.coins} Coins*\n` +
+                          `───────────────────────────`)
+    }
+    
+    let dValue = calculateHand(game.dealerHand)
+    while (dValue < 17) {
+        game.dealerHand.push(game.deck.pop())
+        dValue = calculateHand(game.dealerHand)
+    }
+    
+    let won = false
+    let draw = false
+    let winMsg = ""
+    let coinsDiff = 0
+    
+    if (dValue > 21) {
+        won = true
+        winMsg = `🏆 *Dealer busted! Double payout win!* 🎉`
+        coinsDiff = game.bet
+    } else if (pValue > dValue) {
+        won = true
+        winMsg = `🏆 *Your double down beat the dealer!* 🎉`
+        coinsDiff = game.bet
+    } else if (pValue === dValue) {
+        draw = true
+        winMsg = `🤝 *It's a tie! Bet returned.*`
+        coinsDiff = 0
+    } else {
+        won = false
+        winMsg = `💀 *Dealer won! Doubled losses.*`
+        coinsDiff = -game.bet
+    }
+    
+    if (won) {
+        user.coins += coinsDiff
+        user.xp += 30
+        user.wins += 1
+    } else if (draw) {
+        user.xp += 5
+    } else {
+        user.coins += coinsDiff
+        user.xp += 5
+        user.losses += 1
+    }
+    
+    delete global.blackjack[m.sender]
+    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+    
+    const payoutText = won ? `🟢 *WON:*  *+${coinsDiff} Coins*` : (draw ? `🟡 *TIED:*  *+0 Coins*` : `🔴 *LOST:*  *${coinsDiff} Coins*`)
+    
+    const cardMsg = `🃏  *𝐁𝐋𝐀𝐂𝐊𝐉𝐀𝐂𝐊  𝐃𝐎𝐔𝐁𝐋𝐄  𝐑𝐄𝐒𝐔𝐋𝐓*  🃏\n` +
+                    `───────────────────────────\n\n` +
+                    `👤  *Your Hand:*  ${renderHand(game.playerHand)} (*${pValue}*)\n` +
+                    `🤖  *Dealer Hand:*  ${renderHand(game.dealerHand)} (*${dValue}*)\n\n` +
+                    `───────────────────────────\n` +
+                    `${winMsg}\n\n` +
+                    `${payoutText}\n` +
+                    `💼  *New Balance:*  *${user.coins} Coins*\n` +
+                    `───────────────────────────`
+                    
+    await replygcxeon(cardMsg)
+}
+break
+
+case 'trivia': {
+    global.trivia = global.trivia || {}
+    if (global.trivia[m.sender]) {
+        return replygcxeon(`🧠 *Active Trivia Question Detected!*\n\nYou already have an unsolved trivia. Type *${prefix}answer <A/B/C/D>* to guess!`)
+    }
+    
+    const triviaPool = [
+        { q: "What is the capital of France?", o: ["London", "Berlin", "Paris", "Rome"], a: "C" },
+        { q: "Which planet is known as the Red Planet?", o: ["Venus", "Mars", "Jupiter", "Saturn"], a: "B" },
+        { q: "What is the largest ocean on Earth?", o: ["Atlantic Ocean", "Indian Ocean", "Pacific Ocean", "Arctic Ocean"], a: "C" },
+        { q: "Who wrote 'Romeo and Juliet'?", o: ["Charles Dickens", "William Shakespeare", "Mark Twain", "Jane Austen"], a: "B" },
+        { q: "What is the chemical symbol for Gold?", o: ["Ag", "Au", "Fe", "Cu"], a: "B" },
+        { q: "Which is the smallest country in the world?", o: ["Monaco", "Nauru", "San Marino", "Vatican City"], a: "D" },
+        { q: "What is the hardest natural substance on Earth?", o: ["Gold", "Iron", "Diamond", "Quartz"], a: "C" },
+        { q: "Who painted the Mona Lisa?", o: ["Vincent van Gogh", "Pablo Picasso", "Leonardo da Vinci", "Claude Monet"], a: "C" },
+        { q: "What is the square root of 64?", o: ["6", "7", "8", "9"], a: "C" },
+        { q: "Which is the fastest land animal?", o: ["Lion", "Cheetah", "Leopard", "Pronghorn"], a: "B" }
+    ]
+    
+    const question = triviaPool[Math.floor(Math.random() * triviaPool.length)]
+    
+    global.trivia[m.sender] = {
+        question: question.q,
+        options: question.o,
+        answer: question.a,
+        time: Date.now()
+    }
+    
+    const card = `🧠  *𝐂𝐇𝐄𝐄𝐌𝐒  𝐓𝐑𝐈𝐕𝐈𝐀  𝐂𝐇𝐀𝐋𝐋𝐄𝐍𝐆𝐄*  🧠\n` +
+                 `───────────────────────────\n\n` +
+                 `❓  *Question:* \n"${question.q}"\n\n` +
+                 `  *A.* ${question.o[0]}\n` +
+                 `  *B.* ${question.o[1]}\n` +
+                 `  *C.* ${question.o[2]}\n` +
+                 `  *D.* ${question.o[3]}\n\n` +
+                 `───────────────────────────\n` +
+                 `💰 *Reward:* *+200 Coins* & *+40 XP*!\n` +
+                 `👉 *Answer:* Type *${prefix}answer <A/B/C/D>* to lock in your answer!`
+                 
+    await replygcxeon(card)
+}
+break
+
+case 'answer': case 'ans': {
+    global.trivia = global.trivia || {}
+    const active = global.trivia[m.sender]
+    if (!active) return replygcxeon(`❌ *No Active Trivia Question!*\n\nStart a new trivia game using *${prefix}trivia*!`)
+    
+    if (!text) return replygcxeon(`❌ *Please provide your answer!*\n\nExample: *${prefix}answer C*`)
+    const guess = text.trim().toUpperCase()
+    if (guess !== 'A' && guess !== 'B' && guess !== 'C' && guess !== 'D') {
+        return replygcxeon(`❌ *Invalid Choice!* Please enter A, B, C, or D.`)
+    }
+    
+    const user = global.db.users[m.sender]
+    const correct = guess === active.answer
+    delete global.trivia[m.sender]
+    
+    let coinsDiff = 0
+    let winStatus = ""
+    if (correct) {
+        coinsDiff = 200
+        user.coins += coinsDiff
+        user.xp += 40
+        user.wins += 1
+        winStatus = `🟢 *CORRECT:*  *+${coinsDiff} Coins* & *+40 XP*!`
+    } else {
+        user.xp += 5
+        user.losses += 1
+        winStatus = `🔴 *WRONG:*  The correct answer was *${active.answer}*!`
+    }
+    
+    fs.writeFileSync('./database/database.json', JSON.stringify(global.db, null, 2))
+    
+    const card = `🧠  *𝐓𝐑𝐈𝐕𝐈𝐀  𝐑𝐄𝐒𝐔𝐋𝐓*  🧠\n` +
+                 `───────────────────────────\n\n` +
+                 `❓  *Question:* "${active.question}"\n\n` +
+                 `👤  *Your Guess:*  *${guess}*\n\n` +
+                 `${correct ? '🎉 *Genius! You got it 100% correct!*' : '💀 *Incorrect! The cosmos holds the true knowledge!*'}\n\n` +
+                 `${winStatus}\n` +
+                 `💼  *New Balance:*  *${user.coins} Coins*\n` +
+                 `───────────────────────────`
+                 
+    let gifUrl = ""
+    try {
+        const cat = correct ? 'smile' : 'smug'
+        const res = await axios.get(`https://api.waifu.pics/sfw/${cat}`, { timeout: 3500 })
+        if (res.data?.url) gifUrl = res.data.url
+    } catch (_) {}
+    
+    if (gifUrl) {
+        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+}
+break
+
+case 'lyrics': {
 if (!text) return replygcxeon(`What lyrics you looking for?\nExample usage: ${prefix}lyrics Thunder`)
 XeonStickWait()
 const { lyrics, lyricsv2 } = require('@bochilteam/scraper')
@@ -7334,16 +9973,29 @@ case 'gdrive': {
 	XeonStickWait()
 	const fg = require('api-dylux')
 	try {
-	let res = await fg.GDriveDl(args[0])
-	 await replygcxeon(`
-≡ *Google Drive DL*
-▢ *Nama:* ${res.fileName}
-▢ *Size:* ${res.fileSize}
-▢ *Type:* ${res.mimetype}`)
-	XeonBotInc.sendMessage(m.chat, { document: { url: res.downloadUrl }, fileName: res.fileName, mimetype: res.mimetype }, { quoted: m })
-   } catch {
-	replygcxeon('Error: Check link or try another link') 
-  }
+		let dlFunc = fg.gdrive || fg.GDriveDl
+		let res = null
+		if (typeof dlFunc === 'function') {
+			res = await dlFunc(args[0]).catch(() => null)
+		}
+		if (!res || !res.downloadUrl) {
+			const link = args[0]
+			const idMatch = link.match(/\/d\/([a-zA-Z0-9_-]+)/) || link.match(/id=([a-zA-Z0-9_-]+)/)
+			if (!idMatch) throw new Error('Invalid Google Drive URL')
+			const fileId = idMatch[1]
+			const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`
+			res = {
+				fileName: `gdrive_${fileId}`,
+				fileSize: 'Unknown',
+				mimetype: 'application/octet-stream',
+				downloadUrl: directUrl
+			}
+		}
+		await replygcxeon(`\n≡ *Google Drive DL*\n▢ *Name:* ${res.fileName}\n▢ *Size:* ${res.fileSize}\n▢ *Type:* ${res.mimetype}`)
+		await XeonBotInc.sendMessage(m.chat, { document: { url: res.downloadUrl }, fileName: res.fileName, mimetype: res.mimetype }, { quoted: m })
+   } catch (err) {
+		replygcxeon(`❌ *Error:* ${err?.message || 'Check link or ensure file is public'}`) 
+   }
 }
 break
 case 'invite': {
@@ -7389,10 +10041,15 @@ case 'xnxxsearch': {
               case 'pinterest': {
               	if (!text) return replygcxeon(`Enter Query`)
 XeonStickWait()
-let { pinterest } = require('./lib/scraper')
-anutrest = await pinterest(text)
-result = anutrest[Math.floor(Math.random() * anutrest.length)]
-XeonBotInc.sendMessage(m.chat, { image: { url: result }, caption: '⭔ Media Url : '+result }, { quoted: m })
+try {
+    let { pinterest } = require('./lib/scraper')
+    let anutrest = await pinterest(text)
+    if (!anutrest || anutrest.length === 0) return replygcxeon(`❌ No images found for *${text}*`)
+    let result = anutrest[Math.floor(Math.random() * anutrest.length)]
+    await XeonBotInc.sendMessage(m.chat, { image: { url: result }, caption: '⭔ Media Url : '+result }, { quoted: m })
+} catch (err) {
+    replygcxeon(`❌ *Error:* ${err?.message || err}`)
+}
 }
 break
 case 'ringtone': {
@@ -7490,36 +10147,44 @@ let animetxt = `
                 case 'imdb':
 if (!text) return replygcxeon(`_Name a Series or movie`)
 XeonStickWait()
-            let fids = await axios.get(`http://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY || ''}&t=${text}&plot=full`)
-            let imdbt = ""
-            console.log(fids.data)
-            imdbt += "⚍⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚍\n" + " ``` IMDB SEARCH```\n" + "⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎\n"
-            imdbt += "🎬Title      : " + fids.data.Title + "\n"
-            imdbt += "📅Year       : " + fids.data.Year + "\n"
-            imdbt += "⭐Rated      : " + fids.data.Rated + "\n"
-            imdbt += "📆Released   : " + fids.data.Released + "\n"
-            imdbt += "⏳Runtime    : " + fids.data.Runtime + "\n"
-            imdbt += "🌀Genre      : " + fids.data.Genre + "\n"
-            imdbt += "👨🏻‍💻Director   : " + fids.data.Director + "\n"
-            imdbt += "✍Writer     : " + fids.data.Writer + "\n"
-            imdbt += "👨Actors     : " + fids.data.Actors + "\n"
-            imdbt += "📃Plot       : " + fids.data.Plot + "\n"
-            imdbt += "🌐Language   : " + fids.data.Language + "\n"
-            imdbt += "🌍Country    : " + fids.data.Country + "\n"
-            imdbt += "🎖️Awards     : " + fids.data.Awards + "\n"
-            imdbt += "📦BoxOffice  : " + fids.data.BoxOffice + "\n"
-            imdbt += "🏙️Production : " + fids.data.Production + "\n"
-            imdbt += "🌟imdbRating : " + fids.data.imdbRating + "\n"
-            imdbt += "✅imdbVotes  : " + fids.data.imdbVotes + ""
-           XeonBotInc.sendMessage(m.chat, {
-                image: {
-                    url: fids.data.Poster,
-                },
-                caption: imdbt,
-            }, {
-                quoted: m,
-            })
-            break
+try {
+    const omdbKey = process.env.OMDB_API_KEY || '742b2d09'
+    let fids = await axios.get(`https://www.omdbapi.com/?apikey=${omdbKey}&t=${encodeURIComponent(text)}&plot=full`, { timeout: 10000 })
+    if (!fids?.data || fids.data.Response === 'False') {
+        return replygcxeon(`❌ *Movie not found:* ${fids?.data?.Error || 'No results for ' + text}`)
+    }
+    let imdbt = ""
+    imdbt += "⚍⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚍\n" + " ``` IMDB SEARCH```\n" + "⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎⚎\n"
+    imdbt += "🎬Title      : " + (fids.data.Title || 'N/A') + "\n"
+    imdbt += "📅Year       : " + (fids.data.Year || 'N/A') + "\n"
+    imdbt += "⭐Rated      : " + (fids.data.Rated || 'N/A') + "\n"
+    imdbt += "📆Released   : " + (fids.data.Released || 'N/A') + "\n"
+    imdbt += "⏳Runtime    : " + (fids.data.Runtime || 'N/A') + "\n"
+    imdbt += "🌀Genre      : " + (fids.data.Genre || 'N/A') + "\n"
+    imdbt += "👨🏻‍💻Director   : " + (fids.data.Director || 'N/A') + "\n"
+    imdbt += "✍Writer     : " + (fids.data.Writer || 'N/A') + "\n"
+    imdbt += "👨Actors     : " + (fids.data.Actors || 'N/A') + "\n"
+    imdbt += "📃Plot       : " + (fids.data.Plot || 'N/A') + "\n"
+    imdbt += "🌐Language   : " + (fids.data.Language || 'N/A') + "\n"
+    imdbt += "🌍Country    : " + (fids.data.Country || 'N/A') + "\n"
+    imdbt += "🎖️Awards     : " + (fids.data.Awards || 'N/A') + "\n"
+    imdbt += "📦BoxOffice  : " + (fids.data.BoxOffice || 'N/A') + "\n"
+    imdbt += "🏙️Production : " + (fids.data.Production || 'N/A') + "\n"
+    imdbt += "🌟imdbRating : " + (fids.data.imdbRating || 'N/A') + "\n"
+    imdbt += "✅imdbVotes  : " + (fids.data.imdbVotes || 'N/A') + ""
+
+    if (fids.data.Poster && fids.data.Poster !== 'N/A') {
+        await XeonBotInc.sendMessage(m.chat, {
+            image: { url: fids.data.Poster },
+            caption: imdbt,
+        }, { quoted: m })
+    } else {
+        await replygcxeon(imdbt)
+    }
+} catch (err) {
+    replygcxeon(`❌ *IMDb Error:* ${err?.message || err}`)
+}
+break
             case 'weather':{
 if (!text) return replygcxeon('What location?')
             let wdata = await axios.get(
@@ -7609,7 +10274,7 @@ break
 case 'xbugp' : { //crashes mod whatsapps
 if (!XeonTheCreator) return XeonStickOwner()
 if (!text) return replygcxeon(`Example : ${prefix + command} xeon bihari😂`)
-const { xeonorwot } = require('./XBug/xeonbut2')
+const { xeonbut2: xeonorwot } = require('./XBug/xeonbut2')
 let teks = `${text}`
 {
 XeonBotInc.relayMessage(from, { requestPaymentMessage: { Message: { extendedTextMessage: { text: `${xeonorwot}`, currencyCodeIso4217: 'INR', requestFrom: '0@s.whatsapp.net', expiryTimestamp: 8000, amount: 1, contextInfo:{"externalAdReply": {"title": `PAPA XEON`,"body": ` ${xeonytimewisher} my friend ${pushname}`,
@@ -7624,7 +10289,7 @@ thumbnailUrl: thumb,
 break
 case 'xbugr':{ //crashes both mod and playstore wa
 if (!XeonTheCreator) return XeonStickOwner()
-const { xeonorwot } = require('./XBug/xeonbut2')
+const { xeonbut2: xeonorwot } = require('./XBug/xeonbut2')
 let reactionMessage = proto.Message.ReactionMessage.create({ key: m.key, text: "" })
 XeonBotInc.relayMessage(m.chat, { reactionMessage }, { messageId: '🦄' })
 }

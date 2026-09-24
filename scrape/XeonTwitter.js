@@ -1,41 +1,72 @@
-const axios = require('axios')
-const vm = require('node:vm')
+const axios = require('axios');
+const bochil = require('@bochilteam/scraper');
+const btch = require('btch-downloader');
+const path = require('path');
+const { spawnSync } = require('child_process');
 
-async function XeonTwitter() {
-    let body = new URLSearchParams({
-        "sf_url": encodeURI(arguments[0]),
-        "sf_submit": "",
-        "new": 2,
-        "lang": "id",
-        "app": "",
-        "country": "id",
-        "os": "Windows",
-        "browser": "Chrome",
-        "channel": " main",
-        "sf-nomad": 1
-    });
-    let {
-        data
-    } = await axios({
-        "url": "https://worker.sf-tools.com/savefrom.php",
-        "method": "POST",
-        "data": body,
-        "headers": {
-            "content-type": "application/x-www-form-urlencoded",
-            "origin": "https://id.savefrom.net",
-            "referer": "https://id.savefrom.net/",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.74 Safari/537.36"
+const YTDLP_PATH = path.join(__dirname, '..', 'bin', 'yt-dlp');
+
+async function XeonTwitter(url) {
+    if (!url) throw new Error('Twitter/X URL is required');
+
+    // 1. Try btch-downloader
+    try {
+        const b = await btch.twitter(url);
+        if (b?.status && Array.isArray(b.url) && b.url.length > 0) {
+            return {
+                url: b.url.map((u, i) => ({ url: u, subname: i === 0 ? 'HD' : 'SD' }))
+            };
         }
-    });
-    let exec = '[]["filter"]["constructor"](b).call(a);';
-    data = data.replace(exec, `\ntry {\ni++;\nif (i === 2) scriptResult = ${exec.split(".call")[0]}.toString();\nelse (\n${exec.replace(/;/, "")}\n);\n} catch {}`);
-    let context = {
-        "scriptResult": "",
-        "i": 0
-    };
-    vm.createContext(context);
-    new vm.Script(data).runInContext(context);
-    return JSON.parse(context.scriptResult.split("window.parent.sf.videoResult.show(")?.[1].split(");")?.[0])
+    } catch (e) {}
+
+    // 2. Try fxtwitter API (blazing fast, full HD direct MP4 link)
+    try {
+        const clean = url.replace(/(?:twitter\.com|x\.com)/i, 'api.fxtwitter.com');
+        const { data } = await axios.get(clean, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CheemsBot/8.0)' },
+            timeout: 10000
+        });
+        const video = data?.tweet?.media?.videos?.[0];
+        if (video?.url) {
+            return {
+                url: [
+                    { url: video.url, subname: `${video.width || ''}x${video.height || ''}`.replace(/^x$/, 'HD') }
+                ]
+            };
+        }
+    } catch (e) {}
+
+    // 3. Try bochil twitterdl / snapsave
+    try {
+        const b = await bochil.twitterdlv2(url);
+        if (Array.isArray(b) && b.length > 0 && b[0].url) {
+            return {
+                url: [
+                    { url: b[0].url, subname: b[0].quality || 'HD' }
+                ]
+            };
+        }
+    } catch (e) {}
+
+    // 4. Fallback: yt-dlp -j
+    try {
+        const res = spawnSync(YTDLP_PATH, ['-j', '--no-playlist', url], { encoding: 'utf8', timeout: 15000 });
+        if (res.status === 0 && res.stdout) {
+            const info = JSON.parse(res.stdout);
+            const formats = info.formats || [];
+            const direct = formats.reverse().find(f => f.vcodec !== 'none' && f.acodec !== 'none' && f.ext === 'mp4' && f.url) ||
+                           formats.find(f => f.url);
+            if (direct?.url) {
+                return {
+                    url: [
+                        { url: direct.url, subname: direct.format_note || 'HD' }
+                    ]
+                };
+            }
+        }
+    } catch (e) {}
+
+    throw new Error('Failed to extract Twitter/X video');
 }
 
-module.exports.XeonTwitter = XeonTwitter
+module.exports = { XeonTwitter };

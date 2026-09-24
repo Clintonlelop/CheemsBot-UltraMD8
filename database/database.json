@@ -1,1 +1,67 @@
-{}
+{
+  "sticker": {},
+  "database": {},
+  "game": {
+    "tebaklagu": [],
+    "math": []
+  },
+  "others": {
+    "vote": []
+  },
+  "users": {
+    "2348029399425@s.whatsapp.net": {
+      "afkTime": -1,
+      "afkReason": "",
+      "premium": true,
+      "coins": 50000,
+      "xp": 5000,
+      "wins": 10,
+      "losses": 0,
+      "lastClaim": 0
+    },
+    "2348160208114@s.whatsapp.net": {
+      "afkTime": -1,
+      "afkReason": "",
+      "premium": true,
+      "coins": 50000,
+      "xp": 5000,
+      "wins": 10,
+      "losses": 0,
+      "lastClaim": 0
+    },
+    "68444699525143@lid": {
+      "afkTime": -1,
+      "afkReason": "",
+      "premium": true,
+      "coins": 50000,
+      "xp": 5000,
+      "wins": 10,
+      "losses": 0,
+      "lastClaim": 0
+    },
+    "245217517154312@lid": {
+      "afkTime": -1,
+      "afkReason": "",
+      "premium": true,
+      "coins": 50000,
+      "xp": 5000,
+      "wins": 10,
+      "losses": 0,
+      "lastClaim": 0
+    }
+  },
+  "chats": {
+    "245217517154312@lid": {},
+    "68444699525143@lid": {}
+  },
+  "settings": {
+    "2348029399425@s.whatsapp.net": {
+      "anticall": true,
+      "status": 0,
+      "autobio": false,
+      "autoviewstatus": false,
+      "autosavestatus": false,
+      "statusrequest": true
+    }
+  }
+}

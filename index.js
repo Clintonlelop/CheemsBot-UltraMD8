@@ -1,4 +1,37 @@
 const { modul } = require('./module');
+global.serverLogs = [];
+const originalLog = console.log;
+const originalError = console.error;
+const originalWarn = console.warn;
+
+function formatLogItem(args) {
+    return args.map(arg => {
+        if (typeof arg === 'object') {
+            try { return JSON.stringify(arg); } catch(e) { return String(arg); }
+        }
+        return String(arg);
+    }).join(' ').replace(/\u001b\[\d+m/g, ''); // Strip colors
+}
+
+console.log = (...args) => {
+    originalLog(...args);
+    const text = formatLogItem(args);
+    global.serverLogs.push({ time: new Date().toLocaleTimeString(), level: 'INFO', text });
+    if (global.serverLogs.length > 300) global.serverLogs.shift();
+};
+console.error = (...args) => {
+    originalError(...args);
+    const text = formatLogItem(args);
+    global.serverLogs.push({ time: new Date().toLocaleTimeString(), level: 'ERROR', text });
+    if (global.serverLogs.length > 300) global.serverLogs.shift();
+};
+console.warn = (...args) => {
+    originalWarn(...args);
+    const text = formatLogItem(args);
+    global.serverLogs.push({ time: new Date().toLocaleTimeString(), level: 'WARN', text });
+    if (global.serverLogs.length > 300) global.serverLogs.shift();
+};
+
 const moment = require('moment-timezone');
 const { baileys, boom, chalk, fs, figlet, FileType, path, pino, process, PhoneNumber, axios, yargs, _, qrcodeterminal } = modul;
 const { Boom } = boom
@@ -71,14 +104,11 @@ const originalConsoleLog = console.log;
 
 function checkAndHealError(msg) {
     if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt') || msg.includes('decryption') || msg.includes('session error')) {
-        originalConsoleLog('[AutoHeal-Signal] Intercepted crypto/decryption error. Triggering cache purge...');
-        
         // Extract JIDs to purge specific session files
-        const jidRegex = /[0-9\-_]+@s\.whatsapp\.net|[0-9\-_]+@g\.us/g;
+        const jidRegex = /[0-9\-_]+@s\.whatsapp\.net|[0-9\-_]+@g\.us|[0-9\-_]+@lid/g;
         const matches = msg.match(jidRegex);
         if (matches && global.authDir) {
             for (const jid of matches) {
-                originalConsoleLog(`[AutoHeal-Signal] Dynamically purging desynced session for JID: ${jid}`);
                 purgeJidSession(global.authDir, jid);
             }
         }
@@ -86,40 +116,51 @@ function checkAndHealError(msg) {
         // Clear in-memory keys cache if XeonBotInc is defined
         if (global.XeonBotInc && global.XeonBotInc.authState?.keys?.clear) {
             global.XeonBotInc.authState.keys.clear().catch(() => {});
-            originalConsoleLog('[AutoHeal-Signal] Flushed in-memory key cache successfully.');
         }
     }
 }
 
 console.error = function (...args) {
-    originalConsoleError.apply(console, args);
     try {
         const msg = args.map(arg => (arg instanceof Error ? arg.message + ' ' + arg.stack : String(arg))).join(' ');
+        // Suppress expected internal Signal decryption retries & Bad MAC so they do not crash or flood stderr
+        if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt message with any known session') || msg.includes('No matching sessions found') || msg.includes('Session error:Error: Bad MAC')) {
+            checkAndHealError(msg);
+            return;
+        }
         checkAndHealError(msg);
     } catch (_) {}
+    originalConsoleError.apply(console, args);
 };
 
 console.warn = function (...args) {
-    originalConsoleWarn.apply(console, args);
     try {
         const msg = args.map(arg => (arg instanceof Error ? arg.message + ' ' + arg.stack : String(arg))).join(' ');
+        if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt message with any known session') || msg.includes('No matching sessions found')) {
+            checkAndHealError(msg);
+            return;
+        }
         checkAndHealError(msg);
     } catch (_) {}
+    originalConsoleWarn.apply(console, args);
 };
 
 console.log = function (...args) {
-    originalConsoleLog.apply(console, args);
     try {
         const msg = args.map(arg => String(arg)).join(' ');
         if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt')) {
             checkAndHealError(msg);
         }
     } catch (_) {}
+    originalConsoleLog.apply(console, args);
 };
 
 const prefix = ''
 
 const botStartupTime = Math.floor(Date.now() / 1000)
+
+// Global message ID deduplication cache (keeps IDs for 3 minutes)
+const processedMessageIds = new NodeCache({ stdTTL: 180, checkperiod: 60 })
 
 let rawDb = {}
 try {
@@ -200,6 +241,56 @@ httpApp.get('/pair', async (req, res) => {
   }
 })
 
+httpApp.get('/logs', (req, res) => {
+  res.json(global.serverLogs || [])
+})
+
+httpApp.all(['/reset-session', '/api/reset-session', '/delete-session'], async (req, res) => {
+  try {
+    console.log(color('\n[SESSION RESET] Manual session purge requested. Wiping session directory and backup creds...', 'yellow'))
+    
+    // Clean up active socket
+    if (global.activeSocket || global.XeonBotInc) {
+      try {
+        if (global.activeSocket?.end) global.activeSocket.end(new Error('Session reset requested'))
+        if (global.XeonBotInc?.ws?.close) global.XeonBotInc.ws.close()
+      } catch (e) {}
+      global.activeSocket = null
+    }
+
+    const authDir = path.join(__dirname, global.sessionName || 'session')
+    const backupCredsPath = path.join(__dirname, 'database', 'session_creds_backup.json')
+
+    try {
+      if (fs.existsSync(authDir)) fs.rmSync(authDir, { recursive: true, force: true })
+      fs.mkdirSync(authDir, { recursive: true })
+    } catch (e) {
+      console.error('[Session Reset AuthDir Error]', e?.message || e)
+    }
+
+    try {
+      if (fs.existsSync(backupCredsPath)) fs.unlinkSync(backupCredsPath)
+    } catch (e) {
+      console.error('[Session Reset Backup Error]', e?.message || e)
+    }
+
+    currentQr = ''
+    connectedUser = null
+    botStatus = 'Session reset. Generating new QR / Pairing code...'
+    global.reconnecting = false
+
+    // Trigger restart
+    setTimeout(() => {
+      XeonBotIncBot().catch(console.error)
+    }, 1000)
+
+    return res.json({ success: true, message: 'Session deleted successfully. Ready for new QR scan or pairing code.' })
+  } catch (err) {
+    console.error('[SESSION RESET ERROR]', err?.message || err)
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to reset session' })
+  }
+})
+
 httpApp.get('*', (req, res) => {
   res.setHeader('Content-Type', 'text/html')
   res.send(`<!DOCTYPE html>
@@ -207,10 +298,10 @@ httpApp.get('*', (req, res) => {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Cheems Bot MD - Authentication</title>
+  <title>Cheems Bot MD - Authentication & Dashboard</title>
   <style>
     body { background: #0d1117; color: #e6edf3; font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }
-    .card { background: #161b22; padding: 28px 36px; border-radius: 12px; border: 1px solid #30363d; text-align: center; max-width: 460px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .card { background: #161b22; padding: 28px 36px; border-radius: 12px; border: 1px solid #30363d; text-align: center; max-width: 650px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
     h1 { color: #3fb950; margin: 0 0 12px 0; font-size: 22px; }
     p { color: #8b949e; font-size: 14px; line-height: 1.4; margin: 6px 0; }
     .tab-btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; margin: 4px; }
@@ -223,6 +314,15 @@ httpApp.get('*', (req, res) => {
     .pair-input { width: 100%; padding: 10px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #fff; font-size: 14px; box-sizing: border-box; margin-bottom: 10px; }
     .pair-btn { width: 100%; padding: 10px; background: #238636; color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 14px; }
     .code-display { background: #0d1117; border: 1px solid #238636; color: #3fb950; font-family: monospace; font-size: 24px; font-weight: bold; letter-spacing: 2px; padding: 12px; border-radius: 6px; text-align: center; margin-top: 12px; }
+    
+    /* Logs Panel styling */
+    .logs-panel { margin-top: 16px; text-align: left; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 12px; box-sizing: border-box; }
+    .logs-container { height: 260px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.5; color: #8b949e; white-space: pre-wrap; word-break: break-all; }
+    .log-line { border-bottom: 1px solid #1f242c; padding: 4px 0; }
+    .log-line.error { color: #f85149; }
+    .log-line.warn { color: #d29922; }
+    .log-line.info { color: #8b949e; }
+    .log-time { color: #58a6ff; margin-right: 6px; }
   </style>
 </head>
 <body>
@@ -233,6 +333,7 @@ httpApp.get('*', (req, res) => {
     <div style="margin-top: 14px;">
       <button id="tabQrBtn" class="tab-btn active" onclick="switchTab('qr')">QR Scan</button>
       <button id="tabPairBtn" class="tab-btn" onclick="switchTab('pair')">Pairing Code</button>
+      <button id="tabLogsBtn" class="tab-btn" onclick="switchTab('logs')">Live Logs Dashboard</button>
     </div>
 
     <!-- QR Section -->
@@ -253,15 +354,94 @@ httpApp.get('*', (req, res) => {
       </div>
     </div>
 
-    <div class="badge">BOT ACTIVE</div>
+    <!-- Live Logs Section -->
+    <div id="logsSection" style="display: none;">
+      <div class="logs-panel">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span style="font-size: 13px; font-weight: 600; color: #58a6ff;">Console Log Stream</span>
+          <button onclick="clearLogsUI()" style="background: none; border: none; color: #f85149; font-size: 11px; cursor: pointer; text-decoration: underline;">Clear Display</button>
+        </div>
+        <div id="logsContainer" class="logs-container">Loading log stream...</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 18px; display: flex; justify-content: center; gap: 10px; align-items: center;">
+      <div class="badge">BOT ACTIVE</div>
+      <button onclick="resetSession()" style="background: rgba(248, 81, 73, 0.15); border: 1px solid rgba(248, 81, 73, 0.4); color: #f85149; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; cursor: pointer; transition: 0.2s;" onmouseover="this.style.background='rgba(248, 81, 73, 0.3)'" onmouseout="this.style.background='rgba(248, 81, 73, 0.15)'">🗑️ Delete / Reset Session</button>
+    </div>
   </div>
 
   <script>
+    let lastLogCount = 0;
+    async function resetSession() {
+      if (!confirm('Delete current session and generate a fresh QR code / pairing code?')) return;
+      const statusEl = document.getElementById('statusText');
+      statusEl.innerText = 'Wiping session and restarting...';
+      statusEl.style.color = '#f85149';
+      try {
+        const res = await fetch('/reset-session', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          statusEl.innerText = 'Session deleted! Waiting for new QR / pairing code...';
+          setTimeout(checkQR, 2000);
+        } else {
+          alert('Error: ' + (data.error || 'Failed to reset'));
+        }
+      } catch (err) {
+        alert('Network error resetting session');
+      }
+    }
     function switchTab(mode) {
       document.getElementById('tabQrBtn').classList.toggle('active', mode === 'qr');
       document.getElementById('tabPairBtn').classList.toggle('active', mode === 'pair');
+      document.getElementById('tabLogsBtn').classList.toggle('active', mode === 'logs');
+      
       document.getElementById('qrSection').style.display = mode === 'qr' ? 'block' : 'none';
       document.getElementById('pairSection').style.display = mode === 'pair' ? 'block' : 'none';
+      document.getElementById('logsSection').style.display = mode === 'logs' ? 'block' : 'none';
+      
+      if (mode === 'logs') {
+        fetchLogs();
+      }
+    }
+
+    function clearLogsUI() {
+      document.getElementById('logsContainer').innerHTML = '<div style="color: #8b949e; text-align: center; margin-top: 40px;">Display cleared. Waiting for new logs...</div>';
+    }
+
+    async function fetchLogs() {
+      try {
+        const res = await fetch('/logs');
+        const logs = await res.json();
+        const container = document.getElementById('logsContainer');
+        if (!logs || logs.length === 0) {
+          container.innerHTML = '<div style="color: #8b949e; text-align: center; margin-top: 40px;">No console logs available yet. Try executing commands!</div>';
+          return;
+        }
+        
+        let html = '';
+        logs.forEach(log => {
+          let lvlClass = 'info';
+          if (log.level === 'ERROR') lvlClass = 'error';
+          if (log.level === 'WARN') lvlClass = 'warn';
+          
+          html += '<div class="log-line ' + lvlClass + '">' +
+                  '<span class="log-time">[' + log.time + ']</span>' +
+                  '<span>' + escapeHTML(log.text) + '</span>' +
+                  '</div>';
+        });
+        
+        container.innerHTML = html;
+        // Auto-scroll to bottom of logs on new log lines
+        if (logs.length !== lastLogCount) {
+          container.scrollTop = container.scrollHeight;
+          lastLogCount = logs.length;
+        }
+      } catch (err) {}
+    }
+
+    function escapeHTML(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     async function checkQR() {
@@ -311,6 +491,7 @@ httpApp.get('*', (req, res) => {
     }
 
     setInterval(checkQR, 3000);
+    setInterval(fetchLogs, 2000);
     checkQR();
   </script>
 </body>
@@ -334,6 +515,17 @@ let storeBound = false
 
 async function XeonBotIncBot() {
 	global.XeonBotIncBot = XeonBotIncBot
+	if (global.activeSocket) {
+		try {
+			console.log('[Connection Manager] Found active socket instance. Ending connection to prevent duplicate instances...');
+			global.activeSocket.ev?.removeAllListeners();
+			try { global.activeSocket.ws?.close(); } catch (_) {}
+			try { global.activeSocket.end(); } catch (_) {}
+		} catch (e) {
+			console.log('[Connection Manager] Error cleaning up previous socket:', e.message);
+		}
+		global.activeSocket = null;
+	}
 	if (global.reconnecting) return
 	global.reconnecting = true
 	const authDir = path.join(__dirname, global.sessionName || 'session')
@@ -363,35 +555,40 @@ async function XeonBotIncBot() {
 	let phoneNumberToPair = ''
 
 	if (!state.creds.registered) {
-		console.log(color('\n==================================================', 'cyan'))
-		console.log(color('🤖 CLINTON BOT CONNECTION MENU', 'green'))
-		console.log(color('==================================================', 'cyan'))
-		console.log(color('1. Scan with QR Code (prints in terminal & shows on web)', 'yellow'))
-		console.log(color('2. Use Pairing Code (prompts for number & prints code)', 'yellow'))
-		console.log(color('==================================================\n', 'cyan'))
+		if (process.stdin.isTTY) {
+			console.log(color('\n==================================================', 'cyan'))
+			console.log(color('🤖 CLINTON BOT CONNECTION MENU', 'green'))
+			console.log(color('==================================================', 'cyan'))
+			console.log(color('1. Scan with QR Code (prints in terminal & shows on web)', 'yellow'))
+			console.log(color('2. Use Pairing Code (prompts for number & prints code)', 'yellow'))
+			console.log(color('==================================================\n', 'cyan'))
 
-		const choice = await question(color('Choose option (1 or 2, defaults to 1 after 30 seconds): ', 'green'), 30000)
-		
-		if (choice === 'timeout') {
-			console.log(color('\n[Timeout] No input received within 30s. Defaulting to QR Code mode.', 'yellow'))
-			connectionOption = 'qr'
-		} else if (choice.trim() === '2') {
-			connectionOption = 'pairing'
-			const num = await question(color('\nOkay, input your phone number (with country code, e.g., 2348160208114): ', 'green'), 45000)
-			if (num === 'timeout' || !num.trim()) {
-				console.log(color('\nNo number entered. Defaulting to QR Code mode.', 'yellow'))
+			const choice = await question(color('Choose option (1 or 2, defaults to 1 after 30 seconds): ', 'green'), 30000)
+			
+			if (choice === 'timeout') {
+				console.log(color('\n[Timeout] No input received within 30s. Defaulting to QR Code mode.', 'yellow'))
 				connectionOption = 'qr'
-			} else {
-				phoneNumberToPair = num.replace(/[^0-9]/g, '')
-				if (!phoneNumberToPair || phoneNumberToPair.length < 8) {
-					console.log(color('\nInvalid phone number. Defaulting to QR Code mode.', 'red'))
+			} else if (choice.trim() === '2') {
+				connectionOption = 'pairing'
+				const num = await question(color('\nOkay, input your phone number (with country code, e.g., 2348160208114): ', 'green'), 45000)
+				if (num === 'timeout' || !num.trim()) {
+					console.log(color('\nNo number entered. Defaulting to QR Code mode.', 'yellow'))
 					connectionOption = 'qr'
 				} else {
-					console.log(color(`\nSelected Pairing Code connection for: +${phoneNumberToPair}`, 'green'))
+					phoneNumberToPair = num.replace(/[^0-9]/g, '')
+					if (!phoneNumberToPair || phoneNumberToPair.length < 8) {
+						console.log(color('\nInvalid phone number. Defaulting to QR Code mode.', 'red'))
+						connectionOption = 'qr'
+					} else {
+						console.log(color(`\nSelected Pairing Code connection for: +${phoneNumberToPair}`, 'green'))
+					}
 				}
+			} else {
+				console.log(color('\nSelected QR Code connection.', 'green'))
+				connectionOption = 'qr'
 			}
 		} else {
-			console.log(color('\nSelected QR Code connection.', 'green'))
+			// Non-interactive / web server environment: default to QR immediately so web UI displays QR code instantly
 			connectionOption = 'qr'
 		}
 	} else {
@@ -451,6 +648,7 @@ async function XeonBotIncBot() {
     })
 
     global.XeonBotInc = XeonBotInc
+    global.activeSocket = XeonBotInc
 
     if (!storeBound) {
         store.bind(XeonBotInc.ev)
@@ -519,13 +717,9 @@ try{
 				console.log("Connection Lost from Server, reconnecting...");
 				botStatus = 'Connection Lost, reconnecting...'
 			} else if (reason === DisconnectReason.connectionReplaced) {
-				console.log("Connection Replaced, Another New Session Opened. Purging local state and restarting fresh...");
+				console.log("Connection Replaced, Another New Session Opened. Reconnecting...");
 				botStatus = 'Session Replaced'
-				try {
-					fs.rmSync(authDir, { recursive: true, force: true })
-					fs.mkdirSync(authDir, { recursive: true })
-					if (fs.existsSync(backupCredsPath)) fs.unlinkSync(backupCredsPath)
-				} catch (e) {}
+				// Preserve authDir and backups on replacement, do not wipe!
 			} else if (reason === DisconnectReason.loggedOut) {
 				console.log(`Device Logged Out, Purging Session and Restarting...`);
 				botStatus = 'Device Logged Out'
@@ -577,6 +771,33 @@ try{
             console.log(color(`${themeemoji} INSTAGRAM: @unicorn_xeon `,'magenta'))
             console.log(color(`${themeemoji} WA NUMBER: ${owner}`,'magenta'))
             console.log(color(`${themeemoji} CREDIT: ${wm}\n`,'magenta'))
+
+            // Auto-resolve owner LIDs from WhatsApp servers
+            setTimeout(async () => {
+                try {
+                    const checkList = ['2348160208114@s.whatsapp.net', '2348029399425@s.whatsapp.net']
+                    const results = await XeonBotInc.onWhatsApp(...checkList).catch(() => [])
+                    if (Array.isArray(results)) {
+                        const lidMapPath = path.join(__dirname, 'database', 'lid_map.json')
+                        let lmap = {}
+                        try { lmap = JSON.parse(fs.readFileSync(lidMapPath, 'utf8')) } catch (_) {}
+                        for (const res of results) {
+                            if (res && res.exists && res.lid) {
+                                lmap[res.lid] = res.jid
+                                lmap[res.jid] = res.lid
+                                const lidDigits = String(res.lid).split('@')[0]
+                                const pnDigits = String(res.jid).split('@')[0]
+                                lmap[lidDigits] = pnDigits
+                                lmap[pnDigits] = res.lid
+                                console.log(`[Owner Sync] Resolved WhatsApp LID: ${res.lid} -> ${res.jid}`)
+                            }
+                        }
+                        fs.writeFileSync(lidMapPath, JSON.stringify(lmap, null, 2))
+                    }
+                } catch (e) {
+                    console.log('[Owner Sync] Could not resolve WhatsApp LIDs:', e?.message || e)
+                }
+            }, 3000)
 		}
 	
 } catch (err) {
@@ -623,8 +844,19 @@ XeonBotInc.ev.on('creds.update', async () => {
 XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
     try {
         if (!chatUpdate.messages || !Array.isArray(chatUpdate.messages)) return
+        // ONLY process live notifications ('notify') - ignore append/sync history events to prevent duplicate executions
+        if (chatUpdate.type && chatUpdate.type !== 'notify') return
         for (const kay of chatUpdate.messages) {
             if (!kay) continue
+
+            // Deduplicate incoming messages: prevent running the same message ID more than once
+            const msgId = kay.key?.id
+            if (msgId) {
+                if (processedMessageIds.has(msgId)) {
+                    continue
+                }
+                processedMessageIds.set(msgId, true)
+            }
 
             // Check if message was sent before bot startup to prevent offline spam backlog processing
             const msgTime = kay.messageTimestamp 
@@ -671,11 +903,18 @@ XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
                 handleAutoViewOnce(XeonBotInc, kay).catch(e => console.error('[AutoViewOnce Error]', e));
             }
 
-            if (kay.key && kay.key.remoteJid === 'status@broadcast') {
-                await XeonBotInc.readMessages([kay.key])
-                continue
+            const isStatus = kay.key && kay.key.remoteJid === 'status@broadcast'
+            if (!isStatus && !XeonBotInc.public && !kay.key?.fromMe && chatUpdate.type === 'notify') {
+                const participantKey = kay.key?.participantPn || kay.key?.participant || kay.key?.remoteJid || ''
+                const senderDigits = String(participantKey).split('@')[0].split(':')[0].replace(/[^0-9]/g, '')
+                let ownerNumbers = ['2348160208114', '2348029399425']
+                try {
+                    const loadedOwners = JSON.parse(fs.readFileSync('./database/owner.json'))
+                    if (Array.isArray(loadedOwners)) ownerNumbers.push(...loadedOwners.map(o => String(o).replace(/[^0-9]/g, '')))
+                } catch (_) {}
+                if (global.ownernumber) ownerNumbers.push(String(global.ownernumber).replace(/[^0-9]/g, ''))
+                if (!ownerNumbers.includes(senderDigits)) continue
             }
-            if (!XeonBotInc.public && !kay.key?.fromMe && chatUpdate.type === 'notify') continue
             if (kay.key?.id && typeof kay.key.id === 'string' && kay.key.id.startsWith('BAE5') && kay.key.id.length === 16) continue
             const m = smsg(XeonBotInc, kay, store)
             try {
@@ -887,10 +1126,55 @@ return decode.user && decode.server && decode.user + '@' + decode.server || jid
 } else return jid
 }
 
+XeonBotInc.ev.on('chats.phoneNumberShare', async ({ lid, jid }) => {
+    try {
+        if (!lid || !jid) return
+        const lidMapPath = path.join(__dirname, 'database', 'lid_map.json')
+        let lmap = {}
+        try { lmap = JSON.parse(fs.readFileSync(lidMapPath, 'utf8')) } catch (_) {}
+        lmap[lid] = jid
+        lmap[jid] = lid
+        const lidNum = String(lid).split('@')[0]
+        const jidNum = String(jid).split('@')[0]
+        lmap[lidNum] = jidNum
+        lmap[jidNum] = lid
+        fs.writeFileSync(lidMapPath, JSON.stringify(lmap, null, 2))
+    } catch (_) {}
+})
+
+XeonBotInc.ev.on('contacts.upsert', contacts => {
+    try {
+        const lidMapPath = path.join(__dirname, 'database', 'lid_map.json')
+        let lmap = {}
+        try { lmap = JSON.parse(fs.readFileSync(lidMapPath, 'utf8')) } catch (_) {}
+        let updated = false
+        for (let contact of (contacts || [])) {
+            let id = XeonBotInc.decodeJid(contact.id)
+            if (store && store.contacts) store.contacts[id] = { id, name: contact.notify }
+            if (contact.lid && id) {
+                lmap[contact.lid] = id
+                lmap[id] = contact.lid
+                updated = true
+            }
+        }
+        if (updated) fs.writeFileSync(lidMapPath, JSON.stringify(lmap, null, 2))
+    } catch (_) {}
+})
+
 XeonBotInc.ev.on('contacts.update', update => {
 for (let contact of update) {
 let id = XeonBotInc.decodeJid(contact.id)
 if (store && store.contacts) store.contacts[id] = { id, name: contact.notify }
+if (contact.lid && id) {
+    try {
+        const lidMapPath = path.join(__dirname, 'database', 'lid_map.json')
+        let lmap = {}
+        try { lmap = JSON.parse(fs.readFileSync(lidMapPath, 'utf8')) } catch (_) {}
+        lmap[contact.lid] = id
+        lmap[id] = contact.lid
+        fs.writeFileSync(lidMapPath, JSON.stringify(lmap, null, 2))
+    } catch (_) {}
+}
 }
 })
 

