@@ -41,18 +41,18 @@ global.socialm = "GitHub: Clintonlelop"
 global.location = "Nigeria, Enugu, Enugu"
 
 //bot identity
-global.botname = process.env.BOT_NAME || "CLINTON BOT MD"
+global.botname = process.env.BOT_NAME || "CLINTON BOT ULTRA MD"
 global.owner = [cleanOwnerNumber, "2348029399425", "68444699525143"]
 global.ownerNumber = [`${cleanOwnerNumber}@s.whatsapp.net`, "2348029399425@s.whatsapp.net", "68444699525143@lid", "245217517154312@lid"]
 global.creator = `${cleanOwnerNumber}@s.whatsapp.net`
-global.ownerweb = "https://youtube.com/@DGXeon"
-global.websitex = "https://youtube.com/@DGXeon"
-global.wagc = "https://whatsapp.com/channel/0029VbDlXCo3mFY8hg6bS51V"
-global.themeemoji = '🗿'
-global.wm = "CLINTON BOT"
-global.botscript = 'https://github.com/DGXeon/CheemsBot-MD6'
-global.packname = "CLINTON"
-global.author = "BOT"
+global.ownerweb = "https://github.com/Clintonlelop/CheemsBot-UltraMD8"
+global.websitex = "https://github.com/Clintonlelop/CheemsBot-UltraMD8"
+global.wagc = "https://wa.me/2348029399425"
+global.themeemoji = '⚡'
+global.wm = "CLINTON BOT ULTRA MD"
+global.botscript = 'https://github.com/Clintonlelop/CheemsBot-UltraMD8'
+global.packname = "CLINTON ULTRA"
+global.author = "BOT MD"
 global.prefa = ['','!','.','#','&']
 global.sessionName = 'session'
 global.hituet = 0

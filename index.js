@@ -158,7 +158,7 @@ console.log = function (...args) {
 
 const prefix = ''
 
-const botStartupTime = Math.floor(Date.now() / 1000)
+let botStartupTime = Math.floor(Date.now() / 1000)
 
 // Global message ID deduplication cache (keeps IDs for 3 minutes)
 const processedMessageIds = new NodeCache({ stdTTL: 180, checkperiod: 60 })
@@ -966,8 +966,28 @@ async function XeonBotIncBot() {
 		if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true })
 	} catch (e) {}
 
-	// Auto-restore creds.json from backup if missing or empty
+	// Auto-restore creds.json from backup if missing or empty, or from project root session file
 	try {
+		const rootCredsCandidates = [
+			path.join(__dirname, 'creds.json'),
+			path.join(__dirname, 'session.json'),
+			path.join(__dirname, 'session_creds.json')
+		]
+		for (const cand of rootCredsCandidates) {
+			if (fs.existsSync(cand) && fs.statSync(cand).isFile() && fs.statSync(cand).size > 10) {
+				try {
+					const cData = fs.readFileSync(cand, 'utf8')
+					const cParsed = JSON.parse(cData)
+					if (cParsed.noiseKey || cParsed.me) {
+						console.log(color(`\n[SESSION AUTO-DETECT] Found session credentials at ${path.basename(cand)}! Syncing to session/creds.json...\n`, 'green'))
+						fs.writeFileSync(mainCredsPath, cData)
+						fs.writeFileSync(backupCredsPath, cData)
+						break
+					}
+				} catch (_) {}
+			}
+		}
+
 		const isCredsMissing = !fs.existsSync(mainCredsPath) || fs.statSync(mainCredsPath).size < 10
 		if (isCredsMissing && fs.existsSync(backupCredsPath) && fs.statSync(backupCredsPath).size > 10) {
 			const bData = fs.readFileSync(backupCredsPath, 'utf8')
@@ -1194,6 +1214,7 @@ try{
 			botStatus = 'Connecting to WhatsApp...'
 		}
 		if (update.connection == "open" || update.receivedPendingNotifications == "true") {
+			botStartupTime = Math.floor(Date.now() / 1000)
 			global.reconnecting = false
 			reconnectAttempts = 0
 			currentQr = ''
@@ -1285,8 +1306,11 @@ XeonBotInc.ev.on('creds.update', async () => {
 XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
     try {
         if (!chatUpdate.messages || !Array.isArray(chatUpdate.messages)) return
-        // ONLY process live notifications ('notify') - ignore append/sync history events to prevent duplicate executions
-        if (chatUpdate.type && chatUpdate.type !== 'notify') return
+        // Allow live notifications ('notify') as well as self/synced commands ('append' when fromMe)
+        if (chatUpdate.type && chatUpdate.type !== 'notify') {
+            const hasFromMe = chatUpdate.messages.some(m => m?.key?.fromMe);
+            if (!hasFromMe) return;
+        }
         for (const kay of chatUpdate.messages) {
             if (!kay) continue
 
@@ -1305,7 +1329,8 @@ XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
                     ? kay.messageTimestamp.toNumber() 
                     : Number(kay.messageTimestamp))
                 : null
-            if (msgTime && (botStartupTime - msgTime) > 15) {
+            const maxOldThreshold = kay.key?.fromMe ? 120 : 30
+            if (msgTime && (botStartupTime - msgTime) > maxOldThreshold) {
                 console.log(`[OfflineFilter] Skipping old buffered message/command from ${kay.key?.remoteJid || 'unknown'} (Sent: ${new Date(msgTime * 1000).toLocaleString()})`)
                 continue
             }

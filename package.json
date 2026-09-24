@@ -1,7 +1,7 @@
 {
-  "name": "Cheems-Bot-MD",
-  "version": "8.0.1-2026-clean",
-  "description": "CheemsBot MD8 cleaned full build with 2026-compatible Baileys v6 line and command fixes",
+  "name": "CheemsBot-UltraMD8",
+  "version": "8.1.0",
+  "description": "Clinton Bot Ultra MD - WhatsApp Multi-Device automation bot with web control dashboard",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -13,15 +13,13 @@
   "keywords": [
     "termux",
     "whatsapp",
-    "2023",
     "wabase-md",
-    "base",
     "baileys-md",
     "bot",
     "bot-md",
     "multi-device"
   ],
-  "author": "DGXeon",
+  "author": "Clintonlelop",
   "license": "ISC",
   "dependencies": {
     "@adiwajshing/keyed-db": "^0.2.4",

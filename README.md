@@ -1,117 +1,186 @@
-
-
-<h1 align="center">ꪶ𝗖𝗵𝗲𝗲𝗺𝘀 𝗕𝗼𝘁-𝗠𝗗 𝗩8ꫂ<br></h1>
 <p align="center">
-<img src="https://i.ibb.co/cLtCXVm/cheemspic.jpg" width="540" height="280" />
+  <img src="./XeonMedia/theme/cheemspic.jpg" width="600" alt="Clinton Bot Ultra MD Banner" style="border-radius: 14px; box-shadow: 0 8px 30px rgba(0,0,0,0.5);" />
 </p>
 
-<p align="center">
-Cheems Bot Multi Device is a automated whatsapp bot created by <a href="https://github.com/DGXeon" target="_blank">Xeon</a> using <a href="https://github.com/adiwajshing/Baileys" target="_blank">Baileys</a> and <a href="https://github.com/nodejs" target="_blank">Nodejs</a>. Dont forget to give a star bro.
-</p>
+<h1 align="center">⚡ CheemsBot-UltraMD8 ⚡<br><sub>Clinton Bot Ultra Multi-Device</sub></h1>
 
 <p align="center">
-<a href="https://youtu.be/L_SIk59QeAU"><img title="Size" src="https://img.shields.io/badge/Tutorial-Video-green"></a>
+  <b>A lightning-fast, feature-packed WhatsApp Multi-Device automation bot built with Baileys and Node.js.</b><br>
+  Engineered by <b>Clinton (Lelop)</b> with an integrated Web Control Dashboard, dual pairing options, and refined group suites.
 </p>
 
-------
-
-# ```Bot Info```
 <p align="center">
-<a href="https://github.com/DGXeon/followers"><img title="Followers" src="https://img.shields.io/github/followers/DGXeon?color=red&style=flat-square"></a>
-<a href="https://github.com/DGXeon/CheemsBot-MD8/stargazers/"><img title="Stars" src="https://img.shields.io/github/stars/DGXeon/CheemsBot-MD8?color=blue&style=flat-square"></a>
-<a href="https://github.com/DGXeon/CheemsBot-MD8/network/members"><img title="Forks" src="https://img.shields.io/github/forks/DGXeon/CheemsBot-MD8?color=red&style=flat-square"></a>
-<a href="https://github.com/DGXeon/CheemsBot-MD8/watchers"><img title="Watching" src="https://img.shields.io/github/watchers/DGXeon/CheemsBot-MD8?label=Watchers&color=blue&style=flat-square"></a>
-<a href="https://github.com/DGXeon/CheemsBot-MD8"><img title="Open Source" src="https://img.shields.io/badge/Author-Xeon%20Bot%20Inc.-red?v=103"></a>
-<a href="https://github.com/DGXeon/CheemsBot-MD8/"><img title="Size" src="https://img.shields.io/github/repo-size/DGXeon/CheemsBot-MD8?style=flat-square&color=green"></a>
-<a href="https://hits.seeyoufarm.com"><img src="https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2FDGXeon%2FCheemsBot-MD8&count_bg=%2379C83D&title_bg=%23555555&icon=probot.svg&icon_color=%2300FF6D&title=hits&edge_flat=false"/></a>
-<a href="https://github.com/DGXeon/CheemsBot-MD8/graphs/commit-activity"><img height="20" src="https://img.shields.io/badge/Maintained%3F-yes-green.svg"></a>&nbsp;&nbsp;
-</p>
-<p align='center'>
-    </p>
-
--------
-
-## ```Connect With Me```
-<p align="center">
-<a href="https://wa.me/916909137213"><img src="https://img.shields.io/badge/Contact Xeon-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" />
-<a href="https://chat.whatsapp.com/Kjm8rnDFcpb04gQNSTbW2d"><img src="https://img.shields.io/badge/Join Official GC-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" />
-<a href="https://youtube.com/channel/UCvAo9TZ0Pw9vrJ_0WYRyO3A"><img src="https://img.shields.io/badge/Subscribe Xeon-ff0000?style=for-the-badge&logo=youtube&logoColor=ff000000&link=https://youtube.com/@DGXeon" /><br>
+  <a href="https://github.com/Clintonlelop/CheemsBot-UltraMD8/fork"><img src="https://img.shields.io/badge/Fork-Repository-blue?style=for-the-badge&logo=github" alt="Fork Repository" /></a>
+  <a href="https://github.com/Clintonlelop/CheemsBot-UltraMD8/stargazers"><img src="https://img.shields.io/github/stars/Clintonlelop/CheemsBot-UltraMD8?style=for-the-badge&color=gold" alt="GitHub Stars" /></a>
+  <a href="https://github.com/Clintonlelop/CheemsBot-UltraMD8/network/members"><img src="https://img.shields.io/github/forks/Clintonlelop/CheemsBot-UltraMD8?style=for-the-badge&color=orange" alt="GitHub Forks" /></a>
+  <a href="https://wa.me/2348029399425"><img src="https://img.shields.io/badge/Chat%20on-WhatsApp-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" alt="WhatsApp Clinton" /></a>
 </p>
 
-## ```Donate Me```
+---
 
-- [`FamPay`](https://i.ibb.co/w46VQ8D/Picsart-22-10-08-06-46-30-674.jpg)
+## ⚡ The Ultra Revival: Modernized Beyond the Original
 
-<p align="left">
-Scan qr code from the above button, u can pay through GooglePay, Paytm, PhonePe and FamPay.
-</p>
+> 📢 **Important Context:**  
+> The original CheemsBot repositories created by **DGXeon** (`CheemsBot-MD`, `CheemsBot-MD8`, etc.) have become heavily outdated, broken, or in many cases deleted from GitHub due to unmaintained dependencies, deprecated Baileys versions, and recent WhatsApp protocol changes.
+>
+> **CheemsBot-UltraMD8** is the **definitive, modernized Ultra Edition** engineered and maintained by **Clinton (Lelop)**. It revives the beloved Cheems bot with a completely stabilized engine, resolves persistent keystore corruption, and introduces modern web management tools.
 
-## ```Bot Support Group Chats```
+### 🚀 Ultra Edition vs. Legacy CheemsBot
+| Core Capability | Legacy DGXeon Repositories | ⚡ CheemsBot-UltraMD8 (Ultra Edition) |
+| :--- | :--- | :--- |
+| **Repository Status** | 🛑 Outdated, unmaintained, or deleted | 🟢 **Actively maintained & fully updated** |
+| **Baileys Protocol** | ⚠️ Outdated v4/v5 APIs & breaking changes | 🚀 **Modern `@whiskeysockets/baileys` v6+** |
+| **Pairing & Login** | 💻 Terminal-only text dumps | 🌐 **Web Control Dashboard + Live QR & Pairing Code** |
+| **Session Resilience** | ❌ Frequent logouts & `badSession` file wipes | 🛡️ **Dual-layer persistent backup & auto-recovery** |
+| **Session Management** | ❌ Manual file manipulation | 📁 **Web upload for `.json`, session folders, & ZIPs** |
+| **Command Suite** | 💤 Rigid, plain text responses | ✨ **Refined suites (Dynamic `.invite`, interactive cards)** |
+| **Crash Protection** | ❌ Prone to cipher stub unhandled exceptions | 🛡️ **Self-healing decryption handler & safe restarts** |
 
-- [`1st GC`](https://chat.whatsapp.com/Dc2qyVeK8JbJq8Gr3U1pKH)
-- [`2nd GC`](https://chat.whatsapp.com/BW0o3ZyiAF5Azb1bIqG9Ue)
-- [`3rd GC`](https://chat.whatsapp.com/KMymhLdGcjPHihOkrfHW7q)
+---
 
-# Setup For Deployment 👇
+## 🌟 Highlights & Features
 
-- FORK THE REPOSITORY [Here](https://github.com/DGXeon/CheemsBot-MD8/fork)
+- 🌐 **Built-in Web Control Dashboard (Port 3000)**:
+  - Real-time QR Code scanning directly in your browser.
+  - 8-digit Pairing Code generator for phone number authentication.
+  - Live streaming terminal log viewer with colorized output.
+  - Multi-format session importer (supports raw `creds.json`, ZIP archives, and session folders).
+  - Dynamic banner image customizer.
+- 💌 **Refined Group Invite Suite**:
+  - Upgraded `.invite` command supporting direct `@mention`, reply quoting, or international phone numbers.
+  - Automatic group invite link generation and rich metadata cards.
+- 🛡️ **Session Resilience & Auto-Healing**:
+  - Continuous credential mirroring to `database/session_creds_backup.json` to prevent accidental logouts.
+  - Auto-healing cipher stub decrypter to resolve stale ratchet sessions without breaking keys.
+- 🤖 **Comprehensive Automation**:
+  - Anti-Delete protection, auto view-once media downloader, group moderation, AI integration, sticker/media tools, and more.
 
-## `Scan QR Code For Session`
-[![Cheems Bot](https://repl.it/badge/github/quiec/whatsasena)](https://replit.com/@DGXeon/Cheems-Bot-Multi-Auth-Session-Generator?v=1)
+---
 
-## ` BUILDPACKS`
+## 📱 Developer & Owner Contact
 
-```
-https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest
-https://github.com/clhuang/heroku-buildpack-webp-binaries.git
-```
+Got questions or need custom configurations? Connect directly with the developer:
 
-[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/DGXeon/CheemsBot-MD8/)
+- 📱 **Primary WhatsApp:** [+234 802 939 9425](https://wa.me/2348029399425)
+- 📱 **Secondary WhatsApp:** [+234 816 020 8114](https://wa.me/2348160208114)
+- 🐙 **GitHub Profile:** [@Clintonlelop](https://github.com/Clintonlelop)
+- 📦 **Repository:** [Clintonlelop/CheemsBot-UltraMD8](https://github.com/Clintonlelop/CheemsBot-UltraMD8)
 
-# Install Manually 👇
-## `Requirements`
-* [Node.js](https://nodejs.org/en/)
-* [Git](https://git-scm.com/downloads)
-* [FFmpeg](https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2020-12-08-13-03/ffmpeg-n4.3.1-26-gca55240b8c-win64-gpl-4.3.zip)
-* [Libwebp](https://developers.google.com/speed/webp/download)
-* Any text editor
-## `Clone Repo & Installation dependencies`
+---
+
+## 🚀 Deployment & Installation
+
+### Option 1: Linux VPS / Ubuntu Server (Recommended for 24/7 Uptime)
+
 ```bash
-git clone https://github.com/DGXeon/CheemsBot-MD8.git
-cd CheemsBot-MD8
+# 1. Update system packages
+sudo apt update && sudo apt upgrade -y
 
+# 2. Install Git, Node.js 18 or 20, FFmpeg, and ImageMagick
+sudo apt install -y git curl ffmpeg imagemagick libwebp-dev
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# 3. Clone the repository
+git clone https://github.com/Clintonlelop/CheemsBot-UltraMD8.git
+cd CheemsBot-UltraMD8
+
+# 4. Install dependencies
+npm install
+
+# 5. Start the bot
 npm start
+
+# For 24/7 background operation using PM2:
+sudo npm install -g pm2
+pm2 start index.js --name "clinton-bot"
+pm2 save
+pm2 startup
 ```
-## `For Termux/Ssh/Ubuntu`
+
+---
+
+### Option 2: Termux (Android)
+
+Run the bot directly on your Android phone using Termux:
+
 ```bash
-apt update
-apt upgrade
-pkg update && pkg upgrade
-pkg install bash
-pkg install libwebp
-pkg install git -y
-pkg install nodejs -y 
-pkg install ffmpeg -y 
-pkg install wget
-pkg install imagemagick -y
-git clone https://github.com/DGXeon/CheemsBot-MD8
-cd CheemsBot-MD8
-yarn install
+# 1. Update Termux environment
+pkg update && pkg upgrade -y
+
+# 2. Install required packages
+pkg install git nodejs-lts ffmpeg libwebp imagemagick -y
+
+# 3. Clone repository
+git clone https://github.com/Clintonlelop/CheemsBot-UltraMD8.git
+cd CheemsBot-UltraMD8
+
+# 4. Install dependencies
+npm install
+
+# 5. Start bot
 npm start
+
+# For continuous background execution in Termux:
+npm install -g pm2
+pm2 start index.js --name "clinton-bot"
+pm2 logs
 ```
-## `For VPS`
+
+---
+
+### Option 3: Vercel & Web Server Deployment
+
+> **Note on Vercel Serverless Architecture:**
+> Baileys maintains a persistent, two-way WebSocket connection to WhatsApp servers. Vercel's serverless compute model has short execution timeouts (10s to 60s), meaning long-lived WebSocket sessions require a persistent server (such as a VPS, Docker container, or cloud VM). 
+> 
+> However, you can deploy the web dashboard and webhook integrations on Vercel:
+
+1. **Fork the Repository:**
+   Click [Fork](https://github.com/Clintonlelop/CheemsBot-UltraMD8/fork) on GitHub.
+
+2. **Import to Vercel:**
+   - Log into [Vercel](https://vercel.com) and click **Add New > Project**.
+   - Select your forked `CheemsBot-UltraMD8` repository.
+   - Set the root directory and configure environment variables (e.g. `OWNER_NUMBER`, `BOT_NAME`, `TZ=Africa/Lagos`).
+
+3. **Hybrid Setup:**
+   - Run the core Baileys WebSocket instance on a VPS, container, or VM.
+   - Use the Vercel-hosted deployment to expose the management UI and webhook routes.
+
+---
+
+## ⚙️ Configuration & Environment
+
+Create a `.env` file in the root directory (or use `.env.example` as a template):
+
+```env
+# Bot Identification
+BOT_NAME="CLINTON BOT ULTRA MD"
+OWNER_NUMBER="2348160208114"
+OWNER_NAME="Clinton"
+
+# Timezone (Default: Africa/Lagos)
+TIMEZONE="Africa/Lagos"
+TZ="Africa/Lagos"
+
+# AI Integrations (Optional)
+GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
+CUSTOM_API_KEY=""
+```
+
+---
+
+## 🔗 Fork & Contribute
+
+Feel free to fork this project, submit pull requests, or open issues:
+
 ```bash
-apt install nodejs 
-apt install git 
-apt apt install ffmpeg 
-apt apt install libwebp 
-apt apt install imagrmagick
-apt install bash
-git clone https://github.com/DGXeon/CheemsBot-MD8
-cd CheemsBot-MD8
-npm start
+git clone https://github.com/Clintonlelop/CheemsBot-UltraMD8.git
 ```
-## `For 24/7 Activation (Termux)`
-```bash
-npm i -g pm2 && pm2 start index.js && pm2 save && pm2 logs
-```
+
+---
+
+<p align="center">
+  <sub>Developed with ❤️ by <b><a href="https://github.com/Clintonlelop">Clinton (Lelop)</a></b></sub>
+</p>
