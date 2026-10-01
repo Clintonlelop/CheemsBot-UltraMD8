@@ -104,32 +104,18 @@ const originalConsoleWarn = console.warn;
 const originalConsoleLog = console.log;
 
 function checkAndHealError(msg) {
-    if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt') || msg.includes('decryption') || msg.includes('session error')) {
-        // Extract JIDs to purge specific session files
-        const jidRegex = /[0-9\-_]+@s\.whatsapp\.net|[0-9\-_]+@g\.us|[0-9\-_]+@lid/g;
-        const matches = msg.match(jidRegex);
-        if (matches && global.authDir) {
-            for (const jid of matches) {
-                purgeJidSession(global.authDir, jid);
-            }
-        }
-        
-        // Clear in-memory keys cache if XeonBotInc is defined
-        if (global.XeonBotInc && global.XeonBotInc.authState?.keys?.clear) {
-            global.XeonBotInc.authState.keys.clear().catch(() => {});
-        }
+    // Suppress repeated decryption warnings without destroying Signal session ratchet files
+    if (global.XeonBotInc && global.XeonBotInc.authState?.keys?.clear) {
+        global.XeonBotInc.authState.keys.clear().catch(() => {});
     }
 }
 
 console.error = function (...args) {
     try {
         const msg = args.map(arg => (arg instanceof Error ? arg.message + ' ' + arg.stack : String(arg))).join(' ');
-        // Suppress expected internal Signal decryption retries & Bad MAC so they do not crash or flood stderr
         if (msg.includes('Bad MAC') || msg.includes('Failed to decrypt message with any known session') || msg.includes('No matching sessions found') || msg.includes('Session error:Error: Bad MAC')) {
-            checkAndHealError(msg);
             return;
         }
-        checkAndHealError(msg);
     } catch (_) {}
     originalConsoleError.apply(console, args);
 };
@@ -193,7 +179,7 @@ nocache('./XeonCheems8.js', module => console.log(color('[ CHANGE ]', 'green'), 
 
 // Lightweight HTTP server on port 3000 for platform health check & preview
 const httpApp = express()
-const PORT = process.env.APP_PORT || 3000
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || process.env.APP_PORT || '3000', 10)
 
 httpApp.get('/qr-image', (req, res) => {
   if (!currentQr) {
@@ -928,11 +914,26 @@ httpApp.get('*', (req, res) => {
 </html>`)
 })
 
-httpApp.listen(PORT, '0.0.0.0', () => {
-  console.log(color(`[HTTP Health Server] Listening on 0.0.0.0:${PORT}`, 'cyan'))
-}).on('error', (err) => {
-  if (err.code !== 'EADDRINUSE') console.error('[HTTP Server Error]', err)
-})
+if (global.enableWebDashboard !== false) {
+  const startServer = (portAttempt) => {
+    const serverInstance = httpApp.listen(portAttempt, '0.0.0.0', () => {
+      console.log(color(`[HTTP Health Server] Web Dashboard successfully active on http://0.0.0.0:${portAttempt}`, 'cyan'))
+    });
+    
+    serverInstance.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(color(`[HTTP Server Warning] Port ${portAttempt} is already in use on your VPS/Pterodactyl. Automatically trying next port ${portAttempt + 1}...`, 'yellow'));
+        startServer(portAttempt + 1);
+      } else {
+        console.error('[HTTP Server Error]', err?.message || err);
+      }
+    });
+  };
+  
+  startServer(PORT);
+} else {
+  console.log(color(`[HTTP Health Server] Web Dashboard is disabled via settings.js. Running strictly in Headless Mode (no open ports, safe from collisions).`, 'green'));
+}
 
 global.reconnecting = false
 let reconnectAttempts = 0
@@ -1009,6 +1010,10 @@ async function XeonBotIncBot() {
 		console.log('[Session Init Cleaner]', e?.message || e)
 	}
 	const { saveCreds, state } = await useMultiFileAuthState(authDir)
+	if (!state.creds.registered && state.creds.me?.id) {
+		state.creds.registered = true
+		await saveCreds()
+	}
 
 	let connectionOption = 'qr'
 	let phoneNumberToPair = ''
@@ -1102,7 +1107,7 @@ async function XeonBotIncBot() {
                 const msg = await store.loadMessage(key.remoteJid, key.id)
                 return msg?.message || undefined
             }
-            return undefined
+            return proto.Message.fromObject({})
         }
     })
 
@@ -1336,23 +1341,7 @@ XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
             }
 
             if (!kay.message) {
-                // If message failed decryption (CIPHERTEXT stub), purge broken session for auto-healing
-                if (kay?.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT || kay?.messageStubType === 2) {
-                    const rJid = kay.key?.remoteJid
-                    const participant = kay.key?.participant
-                    if (rJid) {
-                        console.log(`[AutoHeal] Ciphertext decryption stub detected for remoteJid: ${rJid}. Resetting session cache...`)
-                        purgeJidSession(authDir, rJid)
-                    }
-                    if (participant) {
-                        console.log(`[AutoHeal] Ciphertext decryption stub detected for participant: ${participant}. Resetting session cache...`)
-                        purgeJidSession(authDir, participant)
-                    }
-                    if (XeonBotInc.authState?.keys?.clear) {
-                        await XeonBotInc.authState.keys.clear().catch(() => {});
-                        console.log(`[AutoHeal] Flushed cached signal stores successfully.`)
-                    }
-                }
+                // If message failed decryption or is a placeholder stub, wait for Baileys to exchange Signal keys
                 continue
             }
             kay.message = (Object.keys(kay.message)[0] === 'ephemeralMessage') ? kay.message.ephemeralMessage.message : kay.message
@@ -1397,21 +1386,6 @@ XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
 XeonBotInc.ev.on('messages.update', async (updates) => {
     try {
         for (const update of updates || []) {
-            if (update.update?.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT || update.update?.messageStubType === 2) {
-                const rJid = update.key?.remoteJid
-                const participant = update.key?.participant
-                if (rJid) {
-                    console.log(`[AutoHeal] Ciphertext update stub detected for remoteJid: ${rJid}. Resetting session cache...`)
-                    purgeJidSession(authDir, rJid)
-                }
-                if (participant) {
-                    console.log(`[AutoHeal] Ciphertext update stub detected for participant: ${participant}. Resetting session cache...`)
-                    purgeJidSession(authDir, participant)
-                }
-                if (XeonBotInc.authState?.keys?.clear) {
-                    await XeonBotInc.authState.keys.clear().catch(() => {});
-                }
-            }
             if (update.update?.message === null || update.update?.messageStubType === proto.WebMessageInfo.StubType.REVOKE) {
                 if (update.key) {
                     handleAntiDelete(XeonBotInc, update.key, store).catch(e => console.error('[AntiDelete Update Error]', e));
@@ -1748,7 +1722,7 @@ XeonBotInc.sendVideoAsSticker = async (jid, path, quoted, options = {}) => {
   } else {
     stickerBuf = await videoToWebp(buff)
   }
-  return await XeonBotInc.sendMessage(jid, { sticker: stickerBuf, ...options }, { quoted })
+  return await XeonBotInc.sendMessage(jid, { sticker: stickerBuf, isAnimated: true, ...options }, { quoted })
 }
 
 XeonBotInc.copyNForward = async (jid, message, forceForward = false, options = {}) => {
@@ -2001,12 +1975,50 @@ XeonBotInc.sendFile = async (jid, path, filename = '', caption = '', quoted, ptt
         //return XeonBotInc.sendMessage(jid, { [type]: file.data, ...options }, { ...options })
       //}
 
+XeonBotInc.sendGif = async (jid, pathOrUrlOrBuffer, caption = '', quoted = '', options = {}) => {
+  const { gifToMp4 } = require('./lib/converter')
+  let mp4Path = null
+  try {
+    mp4Path = await gifToMp4(pathOrUrlOrBuffer)
+    const videoBuff = fs.readFileSync(mp4Path)
+    return await XeonBotInc.sendMessage(jid, {
+      video: videoBuff,
+      mimetype: 'video/mp4',
+      gifPlayback: true,
+      caption: caption,
+      ...options
+    }, { quoted, ...options })
+  } catch (err) {
+    console.error('[sendGif Error]', err?.message || err)
+    const localFallback = path.join(__dirname, 'XeonMedia', 'reactions', 'default.mp4')
+    if (fs.existsSync(localFallback)) {
+      return await XeonBotInc.sendMessage(jid, {
+        video: fs.readFileSync(localFallback),
+        mimetype: 'video/mp4',
+        gifPlayback: true,
+        caption: caption,
+        ...options
+      }, { quoted, ...options })
+    }
+    return await XeonBotInc.sendMessage(jid, {
+      text: caption || '✨',
+      ...options
+    }, { quoted, ...options })
+  } finally {
+    if (mp4Path) {
+      try { fs.unlinkSync(mp4Path) } catch(_) {}
+    }
+  }
+}
+
 XeonBotInc.sendFileUrl = async (jid, url, caption, quoted, options = {}) => {
       let mime = '';
-      let res = await axios.head(url)
-      mime = res.headers['content-type']
-      if (mime.split("/")[1] === "gif") {
-     return XeonBotInc.sendMessage(jid, { video: await getBuffer(url), caption: caption, gifPlayback: true, ...options}, { quoted: quoted, ...options})
+      try {
+        let res = await axios.head(url, { timeout: 10000 })
+        mime = res.headers['content-type'] || ''
+      } catch(_) {}
+      if (mime.includes("gif") || (typeof url === 'string' && url.toLowerCase().includes('.gif'))) {
+        return await XeonBotInc.sendGif(jid, url, caption, quoted, options)
       }
       let type = mime.split("/")[0]+"Message"
       if(mime === "application/pdf"){
@@ -2021,7 +2033,7 @@ XeonBotInc.sendFileUrl = async (jid, url, caption, quoted, options = {}) => {
       if(mime.split("/")[0] === "audio"){
      return XeonBotInc.sendMessage(jid, { audio: await getBuffer(url), caption: caption, mimetype: 'audio/mpeg', ...options}, { quoted: quoted, ...options })
       }
-      }
+}
       
       /**
      * 

@@ -103,6 +103,7 @@
     "simple-git": "3.36.0",
     "spinnies": "^0.5.1",
     "spotifydl-x": "^0.3.0",
+    "st-shazam": "^1.1.1",
     "steno": "1.0.0",
     "syntax-error": "*",
     "yargs": "^17.2.1",

@@ -16,6 +16,7 @@ global.antispam = true //auto kick spammer (true to on, false to off)
 
 //pairing code setup
 global.usePairingCode = true // Set to true to use Pairing Code in terminal (NO Web link or QR scan required!), set to false for QR code
+global.enableWebDashboard = true // Set to true to run the web panel on port 3000, set to false to run the bot 100% headlessly (no ports opened)
 
 // Custom API / OpenAI key
 global.customApiKey = process.env.CUSTOM_API_KEY || process.env.OPENAI_API_KEY || "sk-ws-H.DDRPIYY.4Mt5.MEUCIQDewvaUX5UpNVng9yhUWlq_hzaMsVK60h_lIAtx4r4u3wIgGsCSPRsE2nl8NCPlc56rbKe4vFOUe3KQWMpSxceV99Q"
@@ -87,7 +88,7 @@ global.mess = {
     group: 'This feature is only for groups!',
     private: 'This feature is only for private chats!',
     bot: 'This feature is only for the bot!',
-    wait: 'Please wait, processing...',
+    wait: '╔═「 ⚡ *CLINTON ULTRA* 」═╗\n  ⏳  *Processing... Hold tight!* 🚀\n╚═「 ⚡ _Powered by Clinton MD_ 」═╝',
     premium: 'This feature is for premium users only! Contact the owner to get premium access.',
     error: 'An error occurred, please try again later.'
 }

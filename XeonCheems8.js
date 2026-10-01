@@ -506,7 +506,11 @@ try {
             }, { quoted: m })
         }
 
-        const XeonStickWait = () => replygcxeon(`⏳  *Processing...*\n_Please wait a moment while I complete your request._`)
+        const XeonStickWait = () => replygcxeon(
+`╔═「 ⚡ *CLINTON ULTRA* 」═╗
+  ⏳  *Processing... Hold tight!* 🚀
+╚═「 ⚡ _Powered by Clinton MD_ 」═╝`
+        )
         const XeonStickAdmin = () => replygcxeon(`❌  *𝐏𝐄𝐑𝐌𝐈𝐒𝐒𝐈𝐎𝐍  𝐃𝐄𝐍𝐈𝐄𝐃!*\n_This command is restricted to Group Administrators only._`)
         const XeonStickBotAdmin = () => replygcxeon(`⚠️  *𝐁𝐎𝐓  𝐀𝐃𝐌𝐈𝐍  𝐑𝐄𝐐𝐔𝐈𝐑𝐄𝐃!*\n_Please promote the bot to Administrator to enable this command._`)
         const XeonStickOwner = () => replygcxeon(`👑  *𝐎𝐖𝐍𝐄𝐑  𝐎𝐍𝐋𝐘!*\n_This command is exclusively reserved for the Bot Owner._`)
@@ -618,12 +622,11 @@ try {
             } catch (_) {}
 
             if (gifUrl) {
-                return XeonBotInc.sendMessage(chatId, {
-                    video: { url: gifUrl },
-                    gifPlayback: true,
-                    caption: cardText,
+                return XeonBotInc.sendGif(chatId, gifUrl, cardText, m, {
                     mentions: [targetJid]
-                }, { quoted: m });
+                }).catch(() => {
+                    return XeonBotInc.sendMessage(chatId, { text: cardText, mentions: [targetJid] }, { quoted: m });
+                });
             } else {
                 return XeonBotInc.sendMessage(chatId, {
                     text: cardText,
@@ -1465,11 +1468,25 @@ return arr[Math.floor(Math.random() * arr.length)]
 const downloadMp4 = async (Link) => {
 try {
     const xeonYt = require('./lib/ytdl2');
-    const vid = await xeonYt.mp4(Link);
-    await XeonBotInc.sendMessage(from, { 
-        video: { url: vid.videoUrl }, 
-        caption: `*Title:* ${vid.title}\n*Channel:* ${vid.channel}\n*Quality:* ${vid.quality}` 
-    }, { quoted: m });
+    const vid = await xeonYt.mp4(Link, '720');
+    const cleanTitle = (vid.title || 'video').replace(/[/\\?%*:|"<>]/g, '');
+    const ytc = `*Title:* ${vid.title}\n*Channel:* ${vid.channel}\n*Quality:* ${vid.quality}`;
+    if (vid.path && fs.existsSync(vid.path)) {
+        await XeonBotInc.sendMessage(from, { 
+            video: fs.readFileSync(vid.path),
+            mimetype: 'video/mp4',
+            fileName: `${cleanTitle}.mp4`,
+            caption: ytc
+        }, { quoted: m });
+        try { fs.unlinkSync(vid.path); } catch(e) {}
+    } else {
+        await XeonBotInc.sendMessage(from, { 
+            video: { url: vid.videoUrl }, 
+            mimetype: 'video/mp4',
+            fileName: `${cleanTitle}.mp4`,
+            caption: ytc 
+        }, { quoted: m });
+    }
 } catch (err) {
     m.reply(`❌ *Error downloading video:* ${err?.message || err}`);
 }
@@ -1977,6 +1994,7 @@ try {
         'chatbot', 'autochat', 'aichat', 'smartchat', 'delete', 'del', 'welcome', 'welcomegc', 'goodbye', 'goodbyegc',
         'left', 'kick', 'add', 'promote', 'demote', 'tagall', 'hidetag', 'linkgroup', 'linkgc', 'gclink', 'grouplink',
         'revoke', 'mute', 'unmute', 'sticker', 's', 'sgif', 'toimg', 'tomp3', 'tovideo', 'play', 'song', 'video',
+        'find', 'shazam', 'whatsong', 'identify', 'findmusic',
         'ytmp3', 'ytmp4', 'google', 'lyrics', 'weather', 'ai', 'gemini', 'gpt', 'brainly', 'join', 'create', 'create_group',
         'antilink', 'antidelete', 'nsfw', 'opentime', 'closetime', 'setwelcome', 'setgoodbye', 'banned', 'banuser', 'unban'
     ])
@@ -3143,7 +3161,7 @@ mentionedJid:[sender],
 })
 }
 break
-case 'animemenu': {
+case 'animemenu': case 'reactionmenu': case 'gifmenu': {
 sendXeonBotIncMessage(from, { 
 text: `Hi @${sender.split("@")[0]}\n\n${animemenu(prefix)}`,
 mentions:[sender],
@@ -5532,19 +5550,137 @@ try {
 }
 }
 break
-case 'ytmp4': case 'ytvideo': {
+case 'ytmp4': case 'ytvideo': case 'video': case 'playvid': {
 const xeonvidoh = require('./lib/ytdl2')
-if (args.length < 1 || !isUrl(text) || !xeonvidoh.isYTUrl(text)) return replygcxeon(`Where is the link??\n\nExample : ${prefix + command} https://youtube.com/watch?v=PtFMh6Tccag`)
+if (!text) return replygcxeon(`Where is the link or title?\n\nExample:\n• ${prefix + command} https://youtube.com/watch?v=PtFMh6Tccag\n• ${prefix + command} anime status edit`)
 XeonStickWait()
 try {
-    const vid = await xeonvidoh.mp4(text)
+    let targetUrl = text
+    if (!xeonvidoh.isYTUrl(text)) {
+        const yts = require('youtube-yts')
+        const search = await yts(text)
+        if (!search?.videos || search.videos.length === 0) return replygcxeon('❌ No videos found matching your query')
+        targetUrl = search.videos[0].url
+    }
+    const vid = await xeonvidoh.mp4(targetUrl, '720')
     const ytc = `\n*${themeemoji}Title:* ${vid.title}\n*${themeemoji}Duration:* ${vid.duration ? vid.duration + 's' : 'N/A'}\n*${themeemoji}Channel:* ${vid.channel}\n*${themeemoji}Quality:* ${vid.quality}`;
-    await XeonBotInc.sendMessage(from, {
-        video: { url: vid.videoUrl },
-        caption: ytc.trim()
-    }, { quoted: m })
+    const cleanTitle = (vid.title || 'video').replace(/[/\\?%*:|"<>]/g, '')
+    if (vid.path && fs.existsSync(vid.path)) {
+        await XeonBotInc.sendMessage(from, {
+            video: fs.readFileSync(vid.path),
+            mimetype: 'video/mp4',
+            fileName: `${cleanTitle}.mp4`,
+            caption: ytc.trim()
+        }, { quoted: m })
+        try { fs.unlinkSync(vid.path) } catch (e) {}
+    } else {
+        await XeonBotInc.sendMessage(from, {
+            video: { url: vid.videoUrl },
+            mimetype: 'video/mp4',
+            fileName: `${cleanTitle}.mp4`,
+            caption: ytc.trim()
+        }, { quoted: m })
+    }
 } catch (err) {
     replygcxeon(`❌ *Error downloading video:* ${err?.message || err}`)
+}
+}
+break
+case 'find': case 'shazam': case 'whatsong': case 'identify': case 'findmusic': {
+const targetMsg = m.quoted ? m.quoted : m
+const targetMime = (targetMsg.msg || targetMsg).mimetype || (m.msg || m).mimetype || ''
+const isAudioOrVideo = /audio|video|document/.test(targetMime)
+
+if (!isAudioOrVideo) {
+    return replygcxeon(
+`╔═════════════════════════╗
+   🎵  *CLINTON AUDIO SHAZAM*  🎵
+╚═════════════════════════╝
+  🔍  *HOW TO USE .FIND*
+  ━━━━━━━━━━━━━━━━━━━━━━━
+  Send or reply to an *Audio*, *Voice Note*,
+  or *Video* clip with:
+  👉  *${prefix + command}*
+
+  ⚡  *What it does:*
+  • Identifies the song & singer
+  • Displays high-res music album banner
+  • Provides direct streaming links to
+    YouTube Music, Spotify, Apple Music & more!
+  ━━━━━━━━━━━━━━━━━━━━━━━
+  ⚡ _Powered by Clinton Ultra MD_`
+    )
+}
+
+XeonStickWait()
+
+try {
+    let mediaBuff = null
+    try {
+        if (typeof targetMsg.download === 'function') {
+            mediaBuff = await targetMsg.download()
+        } else if (typeof m.download === 'function') {
+            mediaBuff = await m.download()
+        }
+    } catch (_) {}
+
+    if (!mediaBuff) {
+        try {
+            mediaBuff = await XeonBotInc.downloadMediaMessage(m.quoted ? m.quoted : m)
+        } catch (_) {}
+    }
+
+    if (!mediaBuff || mediaBuff.length === 0) {
+        return replygcxeon('❌ Failed to download audio/video from the message. Please try again.')
+    }
+
+    const isVideo = /video/.test(targetMime)
+    const { identifyMusic } = require('./lib/findMusic')
+    const song = await identifyMusic(mediaBuff, isVideo)
+
+    const card = 
+`╔═════════════════════════╗
+   🎵  *MUSIC IDENTIFIED*  🎵
+╚═════════════════════════╝
+
+🏷️  *Title :* ${song.title}
+🎤  *Artist / Singer :* ${song.artist}
+💿  *Album :* ${song.album}
+📅  *Release Date :* ${song.releaseDate}
+⏱️  *Duration :* ${song.duration}
+🎭  *Genre :* ${song.genre}
+🏢  *Record Label :* ${song.label}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+   🎧  *DIRECT STREAMING SOURCES*
+━━━━━━━━━━━━━━━━━━━━━━━
+• 💚 *Spotify :*
+  ${song.links.spotify}
+
+• 🎬 *YouTube :*
+  ${song.links.youtube}
+
+• 🎶 *YouTube Music :*
+  ${song.links.ytMusic}
+
+• 🍎 *Apple Music :*
+  ${song.links.appleMusic || 'Search in Music app'}
+
+• 🌐 *All Platforms :*
+  ${song.links.allPlatforms}
+━━━━━━━━━━━━━━━━━━━━━━━
+⚡ _Clinton Bot Ultra Shazam Finder_`
+
+    if (song.banner) {
+        await XeonBotInc.sendMessage(from, {
+            image: { url: song.banner },
+            caption: card
+        }, { quoted: m })
+    } else {
+        await replygcxeon(card)
+    }
+} catch (err) {
+    return replygcxeon(`❌ *Song Recognition Error:* ${err.message || 'No matching song found'}\n_Could not match this audio clip or no clear song was detected._`)
 }
 }
 break
@@ -6115,36 +6251,51 @@ case 'fox_girl': case 'foxgirl': case 'gecg': case 'feed': case 'meow': case 'li
     let imageUrl = ''
     const cmdKey = String(command).toLowerCase()
 
-    // Tier 1: waifu.pics (Modern high-uptime standard API)
+    const localReactionFile = path.join(__dirname, 'XeonMedia', 'reactions', `${cmdKey}.mp4`);
     const waifuPicsCategories = ['slap', 'hug', 'kiss', 'pat', 'cuddle', 'wink', 'smug', 'yeet', 'bonk', 'bully', 'lick', 'bite', 'happy', 'dance', 'wave', 'smile'];
     const resolvedCat = otakuMap[cmdKey] || cmdKey;
-    if (waifuPicsCategories.includes(resolvedCat)) {
-        try {
-            const res = await axios.get(`https://api.waifu.pics/sfw/${resolvedCat}`, { timeout: 3500 })
-            if (res.data?.url) imageUrl = res.data.url
-        } catch (e) {}
-    }
 
-    // Tier 2: otakugifs (Secondary API)
+    // Tier 1: otakugifs (High-speed reliable CDN)
     if (!imageUrl && otakuMap[cmdKey]) {
         try {
-            const res = await axios.get(`https://api.otakugifs.xyz/gif?reaction=${otakuMap[cmdKey]}`, { timeout: 3500 })
-            if (res.data?.url) imageUrl = res.data.url
+            const res = await axios.get(`https://api.otakugifs.xyz/gif?reaction=${otakuMap[cmdKey]}`, { timeout: 3500, headers: { 'User-Agent': 'Mozilla/5.0' } });
+            if (res.data?.url) imageUrl = res.data.url;
         } catch (e) {}
     }
 
-    // Tier 3: nekos.life (Legacy API fallback)
+    // Tier 2: nekos.life (Standard anime API)
     if (!imageUrl && (nekosLifeMap[cmdKey] || nekosLifeMap[cmdKey.replace(/_/g, '')])) {
         try {
-            const cat = nekosLifeMap[cmdKey] || nekosLifeMap[cmdKey.replace(/_/g, '')]
-            const res = await axios.get(`https://nekos.life/api/v2/img/${cat}`, { timeout: 3500 })
-            if (res.data?.url) imageUrl = res.data.url
+            const cat = nekosLifeMap[cmdKey] || nekosLifeMap[cmdKey.replace(/_/g, '')];
+            const res = await axios.get(`https://nekos.life/api/v2/img/${cat}`, { timeout: 3500, headers: { 'User-Agent': 'Mozilla/5.0' } });
+            if (res.data?.url) imageUrl = res.data.url;
         } catch (e) {}
     }
 
-    // Tier 4: Guaranteed Stable fallback gif url
+    // Tier 3: purrbot.site
+    if (!imageUrl && otakuMap[cmdKey]) {
+        try {
+            const res = await axios.get(`https://purrbot.site/api/img/sfw/${otakuMap[cmdKey]}/gif`, { timeout: 3500, headers: { 'User-Agent': 'Mozilla/5.0' } });
+            if (res.data?.link) imageUrl = res.data.link;
+        } catch (e) {}
+    }
+
+    // Tier 4: waifu.pics
+    if (!imageUrl && waifuPicsCategories.includes(resolvedCat)) {
+        try {
+            const res = await axios.get(`https://api.waifu.pics/sfw/${resolvedCat}`, { timeout: 3000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+            if (res.data?.url) imageUrl = res.data.url;
+        } catch (e) {}
+    }
+
+    // Tier 5: High-speed local reaction file
+    if (!imageUrl && fs.existsSync(localReactionFile)) {
+        imageUrl = localReactionFile;
+    }
+
+    // Tier 6: Default fallback
     if (!imageUrl) {
-        imageUrl = 'https://i.pinimg.com/originals/4d/52/63/4d5263a23a31e5bc1d09e5170f3f2db9.gif'
+        imageUrl = path.join(__dirname, 'XeonMedia', 'reactions', 'default.mp4');
     }
 
     let target = m.mentionedJid?.[0] || m.quoted?.sender || null;
@@ -6184,12 +6335,9 @@ case 'fox_girl': case 'foxgirl': case 'gecg': case 'feed': case 'meow': case 'li
     let captionText = funPhrases[cmdKey] || `${senderTag} performed *${cmdKey.toUpperCase()}* on ${targetTag}! ✨`;
 
     try {
-        await XeonBotInc.sendMessage(from, {
-            video: { url: imageUrl },
-            gifPlayback: true,
-            caption: captionText,
+        await XeonBotInc.sendGif(from, imageUrl, captionText, m, {
             mentions: [m.sender, target]
-        }, { quoted: m });
+        });
     } catch (err) {
         try {
             await XeonBotInc.sendMessage(from, {
@@ -6209,16 +6357,33 @@ case 'fox_girl': case 'foxgirl': case 'gecg': case 'feed': case 'meow': case 'li
 }
 break
 case 'tomp4': case 'tovideo': {
-                if (!quoted) return replygcxeon('Reply to Sticker')
-                if (!/webp/.test(mime)) return replygcxeon(`reply sticker with caption *${prefix + command}*`)
-                XeonStickWait()
-		        let { webp2mp4File } = require('./lib/uploader')
-                let media = await XeonBotInc.downloadAndSaveMediaMessage(quoted)
-                let webpToMp4 = await webp2mp4File(media)
-                await XeonBotInc.sendMessage(m.chat, { video: { url: webpToMp4.result, caption: 'Convert Webp To Video' } }, { quoted: m })
-                await fs.unlinkSync(media)
-            }
-            break
+    const targetMsg = m.quoted ? m.quoted : m
+    const targetMime = (targetMsg.msg || targetMsg).mimetype || (m.msg || m).mimetype || ''
+    if (!/webp|image|video/.test(targetMime)) return replygcxeon(`Reply to a Sticker or GIF with caption *${prefix + command}*`)
+    XeonStickWait()
+    try {
+        let media = null
+        try {
+            if (typeof targetMsg.download === 'function') media = await targetMsg.download()
+            else if (typeof m.download === 'function') media = await m.download()
+        } catch (_) {}
+        if (!media) {
+            media = await XeonBotInc.downloadMediaMessage(m.quoted ? m.quoted : m).catch(() => null)
+        }
+        if (!media) return replygcxeon('❌ Failed to download media.')
+        const { convertWebpToMp4 } = require('./lib/converter')
+        const outMp4 = convertWebpToMp4(media)
+        await XeonBotInc.sendMessage(m.chat, {
+            video: fs.readFileSync(outMp4),
+            mimetype: 'video/mp4',
+            caption: '🎬 *Converted To Video*'
+        }, { quoted: m })
+        try { fs.unlinkSync(outMp4) } catch (_) {}
+    } catch (err) {
+        replygcxeon(`❌ *Conversion Error:* ${err.message || err}`)
+    }
+}
+break
             case 'toaud': case 'toaudio': {
             if (!/video/.test(mime) && !/audio/.test(mime)) return replygcxeon(`Send/Reply Video/Audio You Want to Use as Audio With Caption ${prefix + command}`)
             if (!quoted) return replygcxeon(`Send/Reply Video/Audio You Want to Use as Audio With Caption ${prefix + command}`)
@@ -6251,16 +6416,34 @@ case 'tomp4': case 'tovideo': {
             }
             break
             case 'togif': {
-                if (!quoted) return replygcxeon('Reply video')
-                if (!/webp/.test(mime)) return replygcxeon(`reply sticker with caption *${prefix + command}*`)
-                XeonStickWait()
-		let { webp2mp4File } = require('./lib/uploader')
-                let media = await XeonBotInc.downloadAndSaveMediaMessage(quoted)
-                let webpToMp4 = await webp2mp4File(media)
-                await XeonBotInc.sendMessage(m.chat, { video: { url: webpToMp4.result, caption: 'Convert Webp To Video' }, gifPlayback: true }, { quoted: m })
-                await fs.unlinkSync(media)
-            }
-            break
+    const targetMsg = m.quoted ? m.quoted : m
+    const targetMime = (targetMsg.msg || targetMsg).mimetype || (m.msg || m).mimetype || ''
+    if (!/webp|image|video/.test(targetMime)) return replygcxeon(`Reply to a Sticker, GIF, or Video with *${prefix + command}*`)
+    XeonStickWait()
+    try {
+        let media = null
+        try {
+            if (typeof targetMsg.download === 'function') media = await targetMsg.download()
+            else if (typeof m.download === 'function') media = await m.download()
+        } catch (_) {}
+        if (!media) {
+            media = await XeonBotInc.downloadMediaMessage(m.quoted ? m.quoted : m).catch(() => null)
+        }
+        if (!media) return replygcxeon('❌ Failed to download media.')
+        const { convertWebpToMp4 } = require('./lib/converter')
+        const outMp4 = convertWebpToMp4(media)
+        await XeonBotInc.sendMessage(m.chat, {
+            video: fs.readFileSync(outMp4),
+            mimetype: 'video/mp4',
+            gifPlayback: true,
+            caption: '🎞️ *Converted To GIF*'
+        }, { quoted: m })
+        try { fs.unlinkSync(outMp4) } catch (_) {}
+    } catch (err) {
+        replygcxeon(`❌ *Conversion Error:* ${err.message || err}`)
+    }
+}
+break
             case 'toqr':{
   if (!q) return replygcxeon(' Please include link or text!')
    const QrCode = require('qrcode-reader')
@@ -6504,44 +6687,51 @@ case 'checkme':
 XeonBotInc.sendMessage(from, { image: buff, caption: profile, mentions: [bet]},{quoted:m})
 break
 case 'toimg': {
-	XeonStickWait()
-	const getRandom = (ext) => {
-            return `${Math.floor(Math.random() * 10000)}${ext}`
-        }
-        if (!m.quoted) return replygcxeon(`_Reply to Any Sticker._`)
-        let mime = m.quoted.mtype
-if (mime =="imageMessage" || mime =="stickerMessage")
-{
-        let media = await XeonBotInc.downloadAndSaveMediaMessage(m.quoted)
-        let name = await getRandom('.png')
-        exec(`ffmpeg -i ${media} ${name}`, (err) => {
-        	fs.unlinkSync(media)
-            let buffer = fs.readFileSync(name)
-            XeonBotInc.sendMessage(m.chat, { image: buffer }, { quoted: m })      
-fs.unlinkSync(name)
-        })
-        
-} else return replygcxeon(`Please reply to non animated sticker`)
+    const targetMsg = m.quoted ? m.quoted : m
+    const targetMime = (targetMsg.msg || targetMsg).mimetype || (m.msg || m).mimetype || ''
+    if (!/webp|image|video/.test(targetMime)) {
+        return replygcxeon(`_Reply to any Sticker, GIF, or Video with ${prefix + command}_`)
     }
-    break
+    XeonStickWait()
+    try {
+        let media = null
+        try {
+            if (typeof targetMsg.download === 'function') media = await targetMsg.download()
+            else if (typeof m.download === 'function') media = await m.download()
+        } catch (_) {}
+        if (!media) {
+            media = await XeonBotInc.downloadMediaMessage(m.quoted ? m.quoted : m).catch(() => null)
+        }
+        if (!media) return replygcxeon('❌ Failed to download media.')
+        const { convertToImage } = require('./lib/converter')
+        const outPng = convertToImage(media)
+        await XeonBotInc.sendMessage(m.chat, {
+            image: fs.readFileSync(outPng),
+            mimetype: 'image/png',
+            caption: '🖼️ *Converted To Image*'
+        }, { quoted: m })
+        try { fs.unlinkSync(outPng) } catch (_) {}
+    } catch (err) {
+        replygcxeon(`❌ *Conversion Error:* ${err.message || err}`)
+    }
+}
+break
 case 'swm': case 'steal': case 'stickerwm': case 'take':{
 if (!isPrem) return replyprem(mess.premium)
-if (!args.join(" ")) return replygcxeon(`Where is the text?`)
+if (!args.join(" ")) return replygcxeon(`Where is the text? Example: ${prefix + command} PackName | AuthorName`)
 const swn = args.join(" ")
-const pcknm = swn.split("|")[0]
-const atnm = swn.split("|")[1]
-if (m.quoted.isAnimated === true) {
-XeonBotInc.downloadAndSaveMediaMessage(quoted, "gifee")
-XeonBotInc.sendMessage(from, {sticker:fs.readFileSync("gifee.webp")},{quoted:m})
-} else if (/image/.test(mime)) {
-let media = await quoted.download()
-let encmedia = await XeonBotInc.sendImageAsSticker(m.chat, media, m, { packname: pcknm, author: atnm })
-} else if (/video/.test(mime)) {
-if ((quoted.msg || quoted).seconds > 11) return replygcxeon('Maximum 10 Seconds!')
-let media = await quoted.download()
-let encmedia = await XeonBotInc.sendVideoAsSticker(m.chat, media, m, { packname: pcknm, author: atnm })
+const pcknm = swn.split("|")[0]?.trim() || global.packname
+const atnm = swn.split("|")[1]?.trim() || global.author
+if (m.quoted?.isAnimated === true || /video/.test(mime) || /gif/.test(mime)) {
+    let media = await quoted.download().catch(() => null)
+    if (!media) media = await XeonBotInc.downloadMediaMessage(quoted).catch(() => null)
+    if (media) await XeonBotInc.sendVideoAsSticker(m.chat, media, m, { packname: pcknm, author: atnm, isAnimated: true })
+} else if (/image|webp/.test(mime)) {
+    let media = await quoted.download().catch(() => null)
+    if (!media) media = await XeonBotInc.downloadMediaMessage(quoted).catch(() => null)
+    if (media) await XeonBotInc.sendImageAsSticker(m.chat, media, m, { packname: pcknm, author: atnm })
 } else {
-replygcxeon(`Photo/Video?`)
+    replygcxeon(`Reply to a sticker or image with ${prefix + command} Pack | Author`)
 }
 }
 break
@@ -6603,19 +6793,59 @@ case 'qc': case'text': {
     }
     }
     break
-case 's': case 'sticker': case 'stiker': {
-if (!quoted) return replygcxeon(`Send/Reply Images/Videos/Gifs With Captions ${prefix+command}\nVideo Duration 1-9 Seconds`)
-if (/image/.test(mime)) {
-let media = await quoted.download()
-let encmedia = await XeonBotInc.sendImageAsSticker(m.chat, media, m, { packname: global.packname, author: global.author })
+case 's': case 'sticker': case 'stiker': case 'sgif': case 'stickergif': case 'stikergif': {
+const targetMsg = m.quoted ? m.quoted : m
+const targetMime = (targetMsg.msg || targetMsg).mimetype || (m.msg || m).mimetype || ''
 
-} else if (/video/.test(mime)) {
-if ((quoted.msg || quoted).seconds > 11) return replygcxeon('Send/Reply Images/Videos/Gifs With Captions ${prefix+command}\nVideo Duration 1-9 Seconds')
-let media = await quoted.download()
-let encmedia = await XeonBotInc.sendVideoAsSticker(m.chat, media, m, { packname: global.packname, author: global.author })
+if (!/image|video|sticker/.test(targetMime)) {
+    return replygcxeon(`Send/Reply Images/Videos/Gifs with caption *${prefix + command}*\n(Video / GIF Duration 1-10 Seconds)`)
+}
 
-} else {
-replygcxeon(`Send/Reply Images/Videos/Gifs With Captions ${prefix+command}\nVideo Duration 1-9 Seconds`)
+try {
+    let media = null
+    try {
+        if (typeof targetMsg.download === 'function') {
+            media = await targetMsg.download()
+        } else if (typeof m.download === 'function') {
+            media = await m.download()
+        }
+    } catch (_) {}
+
+    if (!media) {
+        try {
+            media = await XeonBotInc.downloadMediaMessage(m.quoted ? m.quoted : m)
+        } catch (_) {}
+    }
+
+    if (!media || media.length === 0) {
+        return replygcxeon('❌ Failed to download media for sticker conversion.')
+    }
+
+    const isGifOrVideo = /video/.test(targetMime) || 
+                         /gif/.test(targetMime) || 
+                         command.includes('gif') || 
+                         (targetMsg.msg && targetMsg.msg.gifPlayback) ||
+                         (targetMsg.isAnimated === true)
+
+    if (isGifOrVideo) {
+        const durationSecs = (targetMsg.msg || targetMsg).seconds || 0
+        if (durationSecs > 15) {
+            return replygcxeon(`⚠️ Video/GIF is too long (${durationSecs}s). Please use clips under 10 seconds.`)
+        }
+        await XeonBotInc.sendVideoAsSticker(m.chat, media, m, {
+            packname: global.packname,
+            author: global.author,
+            isAnimated: true
+        })
+    } else {
+        await XeonBotInc.sendImageAsSticker(m.chat, media, m, {
+            packname: global.packname,
+            author: global.author
+        })
+    }
+} catch (error) {
+    console.error('Sticker conversion error:', error)
+    replygcxeon(`❌ *Sticker Error:* ${error.message || 'Failed to create sticker'}`)
 }
 }
 break
@@ -6665,7 +6895,9 @@ case 'charactercheck': {
         if (res.data?.url) gifUrl = res.data.url;
     } catch (_) {}
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: cardText, mentions: [target] }, { quoted: m });
+        await XeonBotInc.sendGif(from, gifUrl, cardText, m, { mentions: [target] }).catch(() => {
+            return XeonBotInc.sendMessage(from, { text: cardText, mentions: [target] }, { quoted: m });
+        });
     } else {
         await XeonBotInc.sendMessage(from, { text: cardText, mentions: [target] }, { quoted: m });
     }
@@ -8169,21 +8401,25 @@ case 'gifblowjob':
 if (!m.isGroup) return XeonStickGroup()
 if (!AntiNsfw) return replygcxeon(mess.nsfw)
 XeonStickWait()
-  let assss = await axios.get ("https://api.waifu.pics/nsfw/blowjob")
-    var bobuff = await fetchBuffer(assss.data.url)
-    var bogif = await buffergif(bobuff)
-    await XeonBotInc.sendMessage(m.chat,{video:bogif, gifPlayback:true },{quoted:m}).catch(err => {
-    })
-    break
+try {
+  let assss = await axios.get("https://api.waifu.pics/nsfw/blowjob", { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 5000 })
+  await XeonBotInc.sendGif(m.chat, assss.data.url, mess.success, m)
+} catch (e) {
+  replygcxeon("Error fetching GIF")
+}
+break
 case 'gifhentai':
 if (!m.isGroup) return XeonStickGroup()
 if (!AntiNsfw) return replygcxeon(mess.nsfw)
 XeonStickWait()
-var ahegaonsfw = JSON.parse(fs.readFileSync('./HostMedia/nsfw/gifs.json'))
-var xeonyresultx = pickRandom(ahegaonsfw)
-    await XeonBotInc.sendMessage(m.chat,{video:xeonyresultx, gifPlayback:true },{quoted:m}).catch(err => {
-    })
-    break
+try {
+  var ahegaonsfw = JSON.parse(fs.readFileSync('./HostMedia/nsfw/gifs.json'))
+  var xeonyresultx = pickRandom(ahegaonsfw)
+  await XeonBotInc.sendGif(m.chat, xeonyresultx.url || xeonyresultx, mess.success, m)
+} catch (e) {
+  replygcxeon("Error fetching GIF")
+}
+break
     case 'gifs': {
 if (!m.isGroup) return XeonStickGroup()
 if (!AntiNsfw) return replygcxeon(mess.nsfw)
@@ -8809,7 +9045,7 @@ case 'can': {
         if (res.data?.url) gifUrl = res.data.url
     } catch (_) {}
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -8834,7 +9070,7 @@ case 'is_old': {
         if (res.data?.url) gifUrl = res.data.url
     } catch (_) {}
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -8859,7 +9095,7 @@ case 'when_old': {
         if (res.data?.url) gifUrl = res.data.url
     } catch (_) {}
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -8884,7 +9120,7 @@ case 'what_old': {
         if (res.data?.url) gifUrl = res.data.url
     } catch (_) {}
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -8909,7 +9145,7 @@ case 'where_old': {
         if (res.data?.url) gifUrl = res.data.url
     } catch (_) {}
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -8934,7 +9170,7 @@ case 'how_old': {
         if (res.data?.url) gifUrl = res.data.url
     } catch (_) {}
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -8959,7 +9195,7 @@ case 'rate_old': {
         if (res.data?.url) gifUrl = res.data.url
     } catch (_) {}
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -9117,7 +9353,9 @@ case 'soulmate': {
     } catch (_) {}
 
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: cardText, mentions: [me, jodoh] }, { quoted: m });
+        await XeonBotInc.sendGif(from, gifUrl, cardText, m, { mentions: [me, jodoh] }).catch(() => {
+            return XeonBotInc.sendMessage(from, { text: cardText, mentions: [me, jodoh] }, { quoted: m });
+        });
     } else {
         await XeonBotInc.sendMessage(from, { text: cardText, mentions: [me, jodoh] }, { quoted: m });
     }
@@ -9188,12 +9426,9 @@ isForwarded: true,
 
             try {
                 if (gifUrl) {
-                    await XeonBotInc.sendMessage(m.chat, {
-                        video: { url: gifUrl },
-                        gifPlayback: true,
-                        caption: msgText,
+                    await XeonBotInc.sendGif(m.chat, gifUrl, msgText, m, {
                         mentions: [orang, jodoh]
-                    }, { quoted: m })
+                    })
                 } else {
                     await XeonBotInc.sendMessage(m.chat, {
                         text: msgText,
@@ -9498,7 +9733,7 @@ case 'claim': {
     } catch (_) {}
     
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -9537,7 +9772,9 @@ case 'profile': {
     } catch (_) {}
     
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card, mentions: [target] }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m, { mentions: [target] }).catch(() => {
+            return XeonBotInc.sendMessage(from, { text: card, mentions: [target] }, { quoted: m })
+        })
     } else {
         await XeonBotInc.sendMessage(from, { text: card, mentions: [target] }, { quoted: m })
     }
@@ -9611,7 +9848,7 @@ case 'slot': case 'slots': {
     } catch (_) {}
     
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -9670,7 +9907,7 @@ case 'coinflip': case 'cf': {
     } catch (_) {}
     
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -9740,7 +9977,7 @@ case 'roulette': {
     } catch (_) {}
     
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
@@ -10108,7 +10345,7 @@ case 'answer': case 'ans': {
     } catch (_) {}
     
     if (gifUrl) {
-        await XeonBotInc.sendMessage(from, { video: { url: gifUrl }, gifPlayback: true, caption: card }, { quoted: m })
+        await XeonBotInc.sendGif(from, gifUrl, card, m).catch(() => replygcxeon(card))
     } else {
         await replygcxeon(card)
     }
