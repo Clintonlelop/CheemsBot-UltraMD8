@@ -114,12 +114,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Clintonlelop/CheemsBot-UltraMD8.git"
+    "url": "git+https://github.com/DGXeon/CheemsBot-MD8.git"
   },
   "bugs": {
-    "url": "https://github.com/Clintonlelop/CheemsBot-UltraMD8/issues"
+    "url": "https://github.com/DGXeon/CheemsBot-MD8/issues"
   },
-  "homepage": "https://github.com/Clintonlelop/CheemsBot-UltraMD8/#readme",
+  "homepage": "https://github.com/DGXeon/CheemsBot-MD8/#readme",
   "engines": {
     "node": ">=18.0.0"
   }

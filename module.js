@@ -1,44 +1,61 @@
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    fetchLatestBaileysVersion,
-    generateForwardMessageContent,
-    prepareWAMessageMedia,
-    generateWAMessageFromContent,
-    generateMessageID,
-    downloadContentFromMessage,
-    makeInMemoryStore,
-    jidDecode,
-    proto,
-    Browsers
-} = require("@whiskeysockets/baileys")
-const pino = require('pino')
-const { Boom } = require('@hapi/boom')
-const fs = require('fs')
-const chalk = require('chalk')
-const FileType = require('file-type')
-const path = require('path')
-const axios = require('axios')
-const PhoneNumber = require('awesome-phonenumber')
-const { imageToWebp, videoToWebp, writeExifImg, writeExifVid } = require('./lib/exif')
-const { smsg, isUrl, generateMessageTag, getBuffer, getSizeMedia, fetchJson, await, sleep, reSize } = require('./lib/myfunc')
-const { color } = require('./lib/color')
+module.exports = {
+modul: {
+	axios: require('axios'),
+	boom: require('@hapi/boom'),
+	baileys: require("@whiskeysockets/baileys"),
+	chalk: require('chalk'),
+	crypto: require('crypto'),
+	cheerio: require('cheerio'),
+	child_process: require('child_process'),
+	cookie: require('cookie'),
+	fs: require('fs'),
+	fsx: require('fs-extra'),
+	fetch: require('node-fetch'),
+	figlet: require('figlet'),
+	FormData: require('form-data'),
+	FileType: require('file-type'),
+	ffmpeg: require('fluent-ffmpeg'),
+	got: require('got'),
+	gimage: require('g-i-s'),
+	google: require('google-it'),
+	googleTTS: require('google-tts-api'),
+	human: require('human-readable'),
+	jsobfus: require('javascript-obfuscator'),
+	Jimp: require('jimp'),
+	jsdom: require('jsdom'),
+	keyeddb: require('@adiwajshing/keyed-db'),
+	lodash: require('lodash'),
+	moment: require('moment-timezone'),
+	ms: require('ms'),
+	miniget: require('miniget'),
+	maker: require('mumaker'),
+	nodecron: require('node-cron'),
+	nodeid3: require('node-id3'),
+	nodeytm: require('node-youtube-music'),
+	os: require('os'),
+	objectquery: require('object-query-string'),
+	path: require('path'),
+	perf_hooks: require('perf_hooks'),
+	pino: require('pino'),
+	parsems: require('parse-ms'),
+	process: require('process'),
+	PhoneNumber: require('awesome-phonenumber'),
+	qs: require('qs'),
+    qrcodeterminal: require('qrcode-terminal'),
+    qrcode: require('qrcode'),
+    request: require('request'),
+    scrapePrimbon: require('scrape-primbon'),
+    speed: require('performance-now'),
+    stream: require('stream'),
+    syntaxerror: require('syntax-error'),
+    util: require('util'),
+    Utils: require('@whiskeysockets/baileys/lib/Utils'),
+    yargs: require('yargs'),
+    ytdlcr: require('youtubedl-core'),
+    yts: require('yt-search'),
+    yt: require('youtube-yts'),
+    ytdl: require('ytdl-core'),
+    webp: require('node-webpmux')
 
-const modul = {
-    baileys: makeWASocket,
-    boom: Boom,
-    chalk: chalk,
-    fs: fs,
-    figlet: require('figlet'),
-    FileType: FileType,
-    path: path,
-    pino: pino,
-    PhoneNumber: PhoneNumber,
-    axios: axios,
-    yargs: require('yargs/yargs'),
-    _: require('lodash'),
-    qrcodeterminal: require('qrcode-terminal')
 }
-
-module.exports = { modul }
+}

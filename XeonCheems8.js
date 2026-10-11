@@ -22,7 +22,7 @@ const { XeonInstaMp4 } = require('./scrape/XeonInstaMp4')
 const { XeonIgImg } = require('./scrape/XeonIgImg')
 const { XeonFb } = require('./scrape/XeonFb')
 const { XeonTwitter } = require('./scrape/XeonTwitter')
-const { askGemini, generateGeminiImage } = require('./lib/gemini')
+const { askGemini, askChatGPT, generateGeminiImage } = require('./lib/gemini')
 const { askQwen } = require('./lib/qwen')
 const { gifToMp4, audioToPttOgg, generateWaveform, textToPttVoiceNote } = require('./lib/media-tools')
 const { repairSessionFolder, purgeJidSession } = require('./lib/sessionCleaner')
@@ -98,6 +98,51 @@ let ntilinkytch =JSON.parse(fs.readFileSync('./database/antilinkytchannel.json')
 let ntilinkytvid =JSON.parse(fs.readFileSync('./database/antilinkytvideo.json'))
 
 // Persistent anti-link strike records. Keys are <groupJid>:<userJid>.
+let antilinkSettings = {}
+try {
+    if (fs.existsSync('./database/antilink_settings.json')) {
+        antilinkSettings = JSON.parse(fs.readFileSync('./database/antilink_settings.json', 'utf8'))
+    }
+} catch (_) { antilinkSettings = {} }
+
+function saveAntilinkSettings() {
+    try { fs.writeFileSync('./database/antilink_settings.json', JSON.stringify(antilinkSettings, null, 2)) } catch (_) {}
+}
+
+let antibotSettings = {}
+try {
+    if (fs.existsSync('./database/antibot_settings.json')) {
+        antibotSettings = JSON.parse(fs.readFileSync('./database/antibot_settings.json', 'utf8'))
+    }
+} catch (_) { antibotSettings = {} }
+
+function saveAntibotSettings() {
+    try { fs.writeFileSync('./database/antibot_settings.json', JSON.stringify(antibotSettings, null, 2)) } catch (_) {}
+}
+
+let antispamSettings = {}
+try {
+    if (fs.existsSync('./database/antispam_settings.json')) {
+        antispamSettings = JSON.parse(fs.readFileSync('./database/antispam_settings.json', 'utf8'))
+    }
+} catch (_) { antispamSettings = {} }
+
+function saveAntispamSettings() {
+    try { fs.writeFileSync('./database/antispam_settings.json', JSON.stringify(antispamSettings, null, 2)) } catch (_) {}
+}
+
+let antiSpamWarnings = {}
+try {
+    if (fs.existsSync('./database/antispam_warnings.json')) {
+        antiSpamWarnings = JSON.parse(fs.readFileSync('./database/antispam_warnings.json', 'utf8'))
+    }
+} catch (_) { antiSpamWarnings = {} }
+
+function saveAntiSpamWarnings() {
+    try { fs.writeFileSync('./database/antispam_warnings.json', JSON.stringify(antiSpamWarnings, null, 2)) } catch (_) {}
+}
+
+let antiBotWarnings = {}
 let ntwelcome = []
 try {
     if (fs.existsSync('./database/welcome.json')) {
@@ -225,6 +270,9 @@ try {
         const body = (typeof rawBody === 'string' ? rawBody : '') || ''
         const budy = (typeof m.text == 'string' ? m.text : '') || ''
         const trimmedBody = typeof body === 'string' ? body.trim() : ''
+        if (global.moderationDeletedMsgIds && m.key?.id && global.moderationDeletedMsgIds.has(m.key.id)) {
+            return; // Message was already wiped out by moderation purge - skip!
+        }
         const prefix = getCommandPrefix(trimmedBody, global.prefa || ['!'])
         const chath = (m.mtype === 'conversation' && m.message.conversation) ? m.message.conversation : (m.mtype == 'imageMessage') && m.message.imageMessage.caption ? m.message.imageMessage.caption : (m.mtype == 'documentMessage') && m.message.documentMessage.caption ? m.message.documentMessage.caption : (m.mtype == 'videoMessage') && m.message.videoMessage.caption ? m.message.videoMessage.caption : (m.mtype == 'extendedTextMessage') && m.message.extendedTextMessage.text ? m.message.extendedTextMessage.text : (m.mtype == 'buttonsResponseMessage' && m.message.buttonsResponseMessage.selectedButtonId) ? m.message.buttonsResponseMessage.selectedButtonId : (m.mtype == 'templateButtonReplyMessage') && m.message.templateButtonReplyMessage.selectedId ? m.message.templateButtonReplyMessage.selectedId : (m.mtype == 'listResponseMessage') ? m.message.listResponseMessage.singleSelectReply.selectedRowId : (m.mtype == 'messageContextInfo') ? m.message.listResponseMessage?.singleSelectReply?.selectedRowId : ''
         const pes = (m.mtype === 'conversation' && m.message.conversation) ? m.message.conversation : (m.mtype == 'imageMessage') && m.message.imageMessage.caption ? m.message.imageMessage.caption : (m.mtype == 'videoMessage') && m.message.videoMessage.caption ? m.message.videoMessage.caption : (m.mtype == 'extendedTextMessage') && m.message.extendedTextMessage.text ? m.message.extendedTextMessage.text : ''
@@ -236,8 +284,8 @@ try {
         const from = m.isGroup ? m.key.remoteJid : (m.key.remoteJidAlt || m.key.remoteJid)
         if (!m.isGroup && from && m.chat !== from) m.chat = from
         const messagesD = trimmedBody.split(/ +/).shift().toLowerCase()
-        const command = trimmedBody.length > 0 ? trimmedBody.replace(prefix, '').trim().split(/ +/).shift().toLowerCase() : ''
-        const args = trimmedBody.length > 0 ? trimmedBody.trim().split(/ +/).slice(1) : []
+        const command = trimmedBody.length > 0 ? (prefix && trimmedBody.startsWith(prefix) ? trimmedBody.slice(prefix.length).trim().split(/ +/).shift().toLowerCase() : trimmedBody.trim().split(/ +/).shift().toLowerCase().replace(/^[!.\/#&]/, '')) : ''
+        const args = trimmedBody.length > 0 ? (prefix && trimmedBody.startsWith(prefix) ? trimmedBody.slice(prefix.length).trim().split(/ +/).slice(1) : trimmedBody.trim().split(/ +/).slice(1)) : []
         const pushname = m.pushName || "No Name"
         const cleanPhone = (val) => String(val || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '')
         const normalizeJid = (jid) => {
@@ -275,7 +323,6 @@ try {
         const ownerPhoneSet = new Set([
             "2348160208114",
             "2348029399425",
-            "68444699525143",
             cleanPhone(botPn),
             cleanPhone(botNumber)
         ].filter(Boolean))
@@ -300,6 +347,8 @@ try {
         }
         if (global.ownernumber) ownerPhoneSet.add(cleanPhone(global.ownernumber))
         if (global.ownernomer) ownerPhoneSet.add(cleanPhone(global.ownernomer))
+        ownerPhoneSet.add('2348029399425')
+        ownerPhoneSet.add('2348160208114')
 
         const senderRawList = [
             m.sender,
@@ -332,10 +381,6 @@ try {
 
         const creatorIds = new Set([
             ...Array.from(ownerPhoneSet).map(v => v + '@s.whatsapp.net'),
-            "68444699525143@lid",
-            "68444699525143",
-            "245217517154312@lid",
-            "245217517154312",
             botPn,
             botNumber,
             botLid
@@ -349,9 +394,7 @@ try {
             senderPhones.some(p => ownerPhoneSet.has(p)) ||
             senderJids.some(j => creatorIds.has(j)) ||
             senderPhones.includes('2348160208114') ||
-            senderPhones.includes('2348029399425') ||
-            senderPhones.includes('68444699525143') ||
-            senderJids.some(j => j.includes('2348160208114') || j.includes('2348029399425') || j.includes('68444699525143') || j.includes('245217517154312')) ||
+            senderJids.some(j => j.includes('2348160208114')) ||
             (typeof global.ownernumber === 'string' && (senderPhones.includes(global.ownernumber.replace(/[^0-9]/g, '')) || senderJids.some(j => j.includes(global.ownernumber.replace(/[^0-9]/g, '')))))
         )
         const isCreator = XeonTheCreator
@@ -380,8 +423,26 @@ try {
         const isQuotedContact = type === 'extendedTextMessage' && content.includes('contactMessage')
         const isQuotedDocument = type === 'extendedTextMessage' && content.includes('documentMessage')
         const sender = m.sender || (m.isGroup ? (m.key.participantPn || m.key.participant) : (m.key.remoteJidAlt || m.key.remoteJid))
-        const senderNumber = String(sender || '').split('@')[0]
-        const groupMetadata = m.isGroup ? await XeonBotInc.groupMetadata(m.chat).catch(e => null) : null
+        global._groupMetadataCache = global._groupMetadataCache || new Map()
+        let groupMetadata = null
+        if (m.isGroup) {
+            const cached = global._groupMetadataCache.get(m.chat)
+            if (cached && (Date.now() - cached.time < 300000)) {
+                groupMetadata = cached.data
+            } else {
+                try {
+                    groupMetadata = await Promise.race([
+                        XeonBotInc.groupMetadata(m.chat),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500))
+                    ])
+                    if (groupMetadata) {
+                        global._groupMetadataCache.set(m.chat, { time: Date.now(), data: groupMetadata })
+                    }
+                } catch (_) {
+                    groupMetadata = cached?.data || null
+                }
+            }
+        }
         const groupName = m.isGroup ? (groupMetadata?.subject || '') : ''
         const participants = m.isGroup ? (groupMetadata?.participants || []) : []
         // Newer WhatsApp groups may expose both a LID and a phone-number JID
@@ -408,8 +469,7 @@ try {
         const premPhoneSet = new Set([
             ...Array.from(ownerPhoneSet),
             "2348160208114",
-            "2348029399425",
-            "68444699525143"
+            "2348029399425"
         ])
         if (Array.isArray(freshPrem)) {
             freshPrem.forEach(p => {
@@ -420,8 +480,6 @@ try {
         const premJidSet = new Set([
             ...Array.from(creatorIds),
             ...Array.from(premPhoneSet).map(v => v + '@s.whatsapp.net'),
-            "68444699525143@lid",
-            "245217517154312@lid",
             ...(Array.isArray(freshPrem) ? freshPrem.map(normalizeJid) : [])
         ])
 
@@ -433,7 +491,6 @@ try {
             senderJids.some(j => premJidSet.has(j)) ||
             senderPhones.includes('2348160208114') ||
             senderPhones.includes('2348029399425') ||
-            senderPhones.includes('68444699525143') ||
             (global.db?.users?.[m.sender] && global.db.users[m.sender].premium) ||
             (global.db?.users?.[normalizeJid(m.sender)] && global.db.users[normalizeJid(m.sender)].premium) ||
             (global.db?.users?.[cleanPhone(m.sender) + '@s.whatsapp.net'] && global.db.users[cleanPhone(m.sender) + '@s.whatsapp.net'].premium)
@@ -453,7 +510,7 @@ try {
                 ensurePrem(sender)
                 ensurePrem(normalizeJid(m.sender))
                 ensurePrem('2348160208114@s.whatsapp.net')
-                ensurePrem('68444699525143@lid')
+                ensurePrem('2348029399425@s.whatsapp.net')
             }
         }
     	const isUser = xeonverifieduser.includes(sender)
@@ -483,33 +540,49 @@ try {
         const antiToxic = m.isGroup ? nttoxic.includes(from) : false
         const AntiStatus = m.isGroup ? ntstatus.includes(from) : false
         
-        // Auto Join WhatsApp Group Links in DM/Private Messages (no prefix needed)
-        if (!m.isGroup && typeof body === 'string' && body.includes('chat.whatsapp.com/')) {
+        const replygcxeon = async (teks) => {
+            const targets = [from, m.chat, m.key?.remoteJid].filter(Boolean)
+            for (const target of targets) {
+                try {
+                    return await XeonBotInc.sendMessage(target, {
+                        text: String(teks),
+                        mentions: sender ? [sender] : []
+                    }, { quoted: m })
+                } catch (e1) {
+                    try {
+                        return await XeonBotInc.sendMessage(target, {
+                            text: String(teks),
+                            mentions: sender ? [sender] : []
+                        })
+                    } catch (e2) {}
+                }
+            }
+        }
+
+        // Auto Join WhatsApp Group Links in DM/Private Messages (from Owner only, ignoring bot's own messages)
+        const isMsgFromOwner = (isCreator || XeonTheCreator || senderPhones.includes('2348160208114')) && !m.key.fromMe
+        if (!m.isGroup && isMsgFromOwner && typeof body === 'string' && body.includes('chat.whatsapp.com/')) {
             const groupLinkRegex = /chat\.whatsapp\.com\/([0-9A-Za-z]{15,35})/i
             const match = body.match(groupLinkRegex)
             if (match && match[1]) {
                 const inviteCode = match[1]
+                await replygcxeon(`🔍 *WhatsApp Group Link Detected!*\n_Initiating automatic entry sequence for:_\n\`${match[0]}\`\n\n⌛ *Please wait...*`)
                 try {
                     console.log(`[AutoJoin] Extracting DM group link invite code: ${inviteCode}`)
                     await XeonBotInc.groupAcceptInvite(inviteCode)
-                    await replygcxeon(`✅ Successfully auto-joined the group!`)
+                    await replygcxeon(`🟢 *Joined Successfully!*\n\n_I have successfully joined the group and am ready to serve!_ 🚀`)
                 } catch (e) {
-                    await replygcxeon(`❌ Failed to auto-join the group: ${e.message || e}`)
+                    console.error('[AutoJoin Error]', e)
+                    await replygcxeon(`❌ *Join Failed!*\n\n_Reason:_ \`${e.message || e}\`\n\n_Make sure the link is not expired, revoked, or that the bot is not banned from that group._`)
                 }
             }
         }
-        
-        const replygcxeon = async (teks) => {
-            return XeonBotInc.sendMessage(from, {
-                text: String(teks),
-                mentions: sender ? [sender] : []
-            }, { quoted: m })
-        }
 
         const XeonStickWait = () => replygcxeon(
-`╔═「 ⚡ *CLINTON ULTRA* 」═╗
-  ⏳  *Processing... Hold tight!* 🚀
-╚═「 ⚡ _Powered by Clinton MD_ 」═╝`
+`╔══════════════════════════╗
+  ⚡ *𝗖𝗟𝗜𝗡𝗧𝗢𝗡  𝗨𝗟𝗧𝗥𝗔  𝗠𝗗* ⚡
+  ⏳ *𝗣𝗥𝗢𝗖𝗘𝗦𝗦𝗜𝗡𝗚... 𝗛𝗢𝗟𝗗  𝗧𝗜𝗚𝗛𝗧!* 🚀
+╚══════════════════════════╝`
         )
         const XeonStickAdmin = () => replygcxeon(`❌  *𝐏𝐄𝐑𝐌𝐈𝐒𝐒𝐈𝐎𝐍  𝐃𝐄𝐍𝐈𝐄𝐃!*\n_This command is restricted to Group Administrators only._`)
         const XeonStickBotAdmin = () => replygcxeon(`⚠️  *𝐁𝐎𝐓  𝐀𝐃𝐌𝐈𝐍  𝐑𝐄𝐐𝐔𝐈𝐑𝐄𝐃!*\n_Please promote the bot to Administrator to enable this command._`)
@@ -913,9 +986,8 @@ if (isQuotedStatus && isStatusRequest) {
     }
 }
 
-if (!XeonBotInc.public) {
-if (!m.key.fromMe) return
-}
+// Public mode forced true for all users and main WhatsApp
+XeonBotInc.public = true;
 
 //chat counter (console log)
         if (m.message && m.isGroup) {
@@ -1241,43 +1313,98 @@ async function sendChannelButtonMessage(chatId, message, options = {}) {
     }
 }
 
+async function sendHorizontalCarouselMenu(chatId, rawMenuText, senderJid, options = {}) {
+    try {
+        const categoryBlocks = rawMenuText.split(/(?=\s*───『\s*[^』]+\s*』───)/g).filter(b => b.trim().length > 0);
+        
+        if (!categoryBlocks || categoryBlocks.length === 0) {
+            return await sendXeonBotIncMessage(chatId, { text: rawMenuText, mentions: [senderJid] }, options);
+        }
+
+        const cards = [];
+        for (const block of categoryBlocks) {
+            const card = proto.Message.InteractiveMessage.create({
+                body: proto.Message.InteractiveMessage.Body.create({
+                    text: block.trim()
+                })
+            });
+            cards.push(card);
+        }
+
+        const carouselMessage = proto.Message.InteractiveMessage.CarouselMessage.create({
+            cards: cards
+        });
+
+        const interactiveMessage = proto.Message.InteractiveMessage.create({
+            body: proto.Message.InteractiveMessage.Body.create({ 
+                text: `⚡ *CLINTON BOT ULTRA MD* ⚡\n_Hi @${senderJid ? senderJid.split('@')[0] : 'User'}, swipe horizontally (sideways) to explore categories!_` 
+            }),
+            carouselMessage: carouselMessage
+        });
+
+        const generated = generateWAMessageFromContent(chatId, {
+            viewOnceMessage: {
+                message: {
+                    messageContextInfo: {
+                        deviceListMetadata: {},
+                        deviceListMetadataVersion: 2
+                    },
+                    interactiveMessage
+                }
+            }
+        }, {
+            quoted: options?.quoted || (typeof m !== 'undefined' ? m : undefined),
+            userJid: XeonBotInc.user?.id
+        });
+
+        return await XeonBotInc.relayMessage(chatId, generated.message, {
+            messageId: generated.key.id
+        });
+    } catch (err) {
+        console.error('[Carousel Menu Relay Error, falling back to standard menu]', err?.message || err);
+        return await sendXeonBotIncMessage(chatId, { 
+            text: `Hi @${senderJid ? senderJid.split('@')[0] : 'User'}\n\n${rawMenuText}`,
+            mentions: [senderJid]
+        }, options);
+    }
+}
+
 async function sendXeonBotIncMessage(chatId, message, options = {}) {
     const textContent = String(message?.text || message?.caption || '')
     const mentions = Array.isArray(message?.mentions) ? message.mentions : (message?.contextInfo?.mentionedJid || (typeof sender !== 'undefined' && sender ? [sender] : []))
-    const quoteOpts = (typeof m !== 'undefined' && m) ? { quoted: m, ...options } : options
     
-    // Look for image thumbnail or bot preview picture
-    let imageBuffer = null
-    const adThumbnail = message?.contextInfo?.externalAdReply?.thumbnail
-    if (Buffer.isBuffer(adThumbnail) && adThumbnail.length > 0) {
-        imageBuffer = adThumbnail
-    } else {
-        const picPath = path.join(__dirname, "XeonMedia", "theme", "cheemspic.jpg")
-        if (fs.existsSync(picPath)) {
-            try { imageBuffer = fs.readFileSync(picPath) } catch (e) {}
+    const baseContext = {
+        forwardingScore: 999,
+        isForwarded: true,
+        mentionedJid: mentions,
+        ...(message?.contextInfo || {})
+    }
+
+    const quoteOpts = (typeof m !== 'undefined' && m) ? { 
+        quoted: m, 
+        ...options,
+        contextInfo: {
+            ...baseContext,
+            ...(options.contextInfo || {})
         }
+    } : {
+        ...options,
+        contextInfo: baseContext
     }
 
     try {
-        if (imageBuffer) {
-            return await XeonBotInc.sendMessage(chatId, {
-                image: imageBuffer,
-                caption: textContent,
-                mentions
-            }, quoteOpts)
-        } else {
-            return await XeonBotInc.sendMessage(chatId, {
-                text: textContent,
-                mentions
-            }, quoteOpts)
-        }
+        return await XeonBotInc.sendMessage(chatId, {
+            text: textContent,
+            mentions,
+            contextInfo: baseContext
+        }, quoteOpts)
     } catch (err) {
-        console.log('[sendXeonBotIncMessage ERROR] Falling back to text:', err?.message || err)
+        console.log('[sendXeonBotIncMessage ERROR] Falling back to pure text:', err?.message || err)
         try {
             return await XeonBotInc.sendMessage(chatId, {
                 text: textContent,
                 mentions
-            }, quoteOpts)
+            })
         } catch (e) {
             console.error('[sendXeonBotIncMessage FAIL]:', e?.message || e)
         }
@@ -1788,8 +1915,154 @@ async function igstalk(Username) {
   })
 }
 
+async function normalizeAndValidateJid(rawInput) {
+    if (!rawInput) return null
+    let num = String(rawInput).replace(/[^0-9]/g, '')
+    if (!num) return null
+
+    if (num.startsWith('0') && num.length === 11) {
+        num = '234' + num.slice(1)
+    } else if (num.length === 10 && (num.startsWith('80') || num.startsWith('81') || num.startsWith('70') || num.startsWith('90') || num.startsWith('91'))) {
+        num = '234' + num
+    }
+
+    const jid = num + '@s.whatsapp.net'
+    try {
+        if (typeof XeonBotInc !== 'undefined' && XeonBotInc.onWhatsApp) {
+            const result = await XeonBotInc.onWhatsApp(jid)
+            if (result && Array.isArray(result) && result.length > 0 && result[0].exists) {
+                return XeonBotInc.decodeJid(result[0].jid)
+            }
+        }
+    } catch (_) {}
+
+    return jid
+}
+
 async function replyprem(teks) {
     m.reply(`This feature is for premium user, contact the owner to become premium user`)
+}
+
+// Rolling message tracker per sender for bulk deletion and bot purge
+if (!global.recentSenderMessages) global.recentSenderMessages = {}
+if (!global.moderationDeletedMsgIds) global.moderationDeletedMsgIds = new Set()
+if (!global.knownBotsInChat) global.knownBotsInChat = {}
+
+async function deleteModerationMsg(chatId, key) {
+    if (!key) return false
+    if (key.id) global.moderationDeletedMsgIds.add(key.id)
+    try {
+        await XeonBotInc.sendMessage(chatId, { delete: key })
+        return true
+    } catch (e) {
+        try {
+            await XeonBotInc.sendMessage(chatId, {
+                delete: {
+                    remoteJid: chatId,
+                    fromMe: key.fromMe || false,
+                    id: key.id,
+                    participant: key.participant || key.remoteJid
+                }
+            })
+            return true
+        } catch (_) {
+            return false
+        }
+    }
+}
+
+async function purgeAllSenderMessages(chatId, targetSender, additionalIds = []) {
+    if (!global.recentSenderMessages) global.recentSenderMessages = {}
+    if (!global.recentSenderMessages[chatId]) global.recentSenderMessages[chatId] = {}
+
+    const targetSet = new Set()
+    if (targetSender) targetSet.add(targetSender)
+    if (Array.isArray(additionalIds)) {
+        additionalIds.forEach(id => { if (id) targetSet.add(id) })
+    }
+
+    const keyMap = new Map() // msgId -> key
+
+    // 1. Collect keys from global.recentSenderMessages[chatId]
+    for (const [sId, keyList] of Object.entries(global.recentSenderMessages[chatId])) {
+        const matchesTarget = Array.from(targetSet).some(ts => {
+            if (!ts) return false
+            if (sId === ts) return true
+            const tsPhone = ts.split('@')[0]
+            const sIdPhone = sId.split('@')[0]
+            return tsPhone && sIdPhone && tsPhone === sIdPhone
+        })
+
+        if (matchesTarget && Array.isArray(keyList)) {
+            for (const key of keyList) {
+                if (key && key.id && !keyMap.has(key.id)) {
+                    keyMap.set(key.id, key)
+                }
+            }
+        }
+    }
+
+    // 2. Collect keys from Baileys store.messages[chatId]
+    if (typeof store !== 'undefined' && store && store.messages && store.messages[chatId]) {
+        try {
+            const rawMsgs = store.messages[chatId]
+            const msgsList = Array.isArray(rawMsgs) 
+                ? rawMsgs 
+                : (rawMsgs.array || Object.values(rawMsgs || {}))
+
+            for (const msgObj of msgsList) {
+                if (!msgObj || !msgObj.key) continue
+                const p1 = msgObj.key.participant || msgObj.participant || msgObj.sender
+                const p2 = msgObj.key.participantPn || null
+                const p3 = msgObj.key.participantLid || null
+
+                const matches = Array.from(targetSet).some(ts => {
+                    if (!ts) return false
+                    const tsPhone = ts.split('@')[0]
+                    return (
+                        (p1 && p1.includes(tsPhone)) ||
+                        (p2 && p2.includes(tsPhone)) ||
+                        (p3 && p3.includes(tsPhone))
+                    )
+                })
+
+                if (matches && !keyMap.has(msgObj.key.id)) {
+                    keyMap.set(msgObj.key.id, msgObj.key)
+                }
+            }
+        } catch (e) {
+            console.error('[purgeAllSenderMessages store error]', e)
+        }
+    }
+
+    let deletedCount = 0
+    const keys = Array.from(keyMap.values())
+
+    // Batch delete messages in parallel chunks of 5
+    for (let i = 0; i < keys.length; i += 5) {
+        const chunk = keys.slice(i, i + 5)
+        await Promise.all(chunk.map(async (key) => {
+            const success = await deleteModerationMsg(chatId, key)
+            if (success) deletedCount++
+        }))
+        if (i + 5 < keys.length) {
+            await sleep(50)
+        }
+    }
+
+    // Clear tracked keys for this target
+    for (const sId of Object.keys(global.recentSenderMessages[chatId])) {
+        const matchesTarget = Array.from(targetSet).some(ts => {
+            if (!ts) return false
+            if (sId === ts) return true
+            return sId.split('@')[0] === ts.split('@')[0]
+        })
+        if (matchesTarget) {
+            global.recentSenderMessages[chatId][sId] = []
+        }
+    }
+
+    return deletedCount
 }
 
         // Autosticker gc
@@ -1805,18 +2078,38 @@ async function replyprem(teks) {
             }
         }
 
-// Unified Anti-Link and Anti-Status moderation.
-// - Admins/owner can always send links/status.
-// - Non-admin members get 3 strikes per group.
-// - The offending message is deleted on every strike.
-// - Strike records survive bot restarts.
-// - Strike #3 removes the member from the group.
+// Unified Anti-Link, Anti-Status, and Anti-Bot moderation.
 if (m.isGroup) {
+    if (m.chat && sender) {
+        if (!global.recentSenderMessages[m.chat]) global.recentSenderMessages[m.chat] = {}
+        const allSenderIdentifiers = senderIds && Array.isArray(senderIds) && senderIds.length > 0 ? senderIds : [sender]
+        for (const sId of allSenderIdentifiers) {
+            if (!sId) continue
+            if (!global.recentSenderMessages[m.chat][sId]) global.recentSenderMessages[m.chat][sId] = []
+            if (!global.recentSenderMessages[m.chat][sId].some(k => k && k.id === m.key.id)) {
+                global.recentSenderMessages[m.chat][sId].push(m.key)
+                if (global.recentSenderMessages[m.chat][sId].length > 100) {
+                    global.recentSenderMessages[m.chat][sId].shift()
+                }
+            }
+        }
+    }
+
     const linkText = String(budy || m.text || m.caption || '')
     const lowerLinkText = linkText.toLowerCase()
     const detectedLinks = []
     const addDetection = (name, enabled, regex) => {
         if (enabled && regex.test(linkText)) detectedLinks.push(name)
+    }
+
+    const antilinkCfg = antilinkSettings[m.chat] || { mode: 'off', maxWarn: 3 }
+    const isAntilinkActive = (antilinkCfg && antilinkCfg.mode !== 'off') || AntiLinkAll || Antilinkgc || AntiLinkYoutubeVid || AntiLinkYoutubeChannel || AntiLinkInstagram || AntiLinkFacebook || AntiLinkTelegram || AntiLinkTiktok || AntiLinkTwitter || antiWame
+
+    if (isAntilinkActive) {
+        const linkRegex = /(?:https?:\/\/|www\.)\S+|\b(?:[a-z0-9-]+\.)+(?:com|net|org|ng|co|me|io|ly|app|dev|xyz|info|biz|site|online|tv|cc|link|tk|ga|cf|gq|ml)\b(?:\/\S*)?|(?:chat\.whatsapp\.com|wa\.me|api\.whatsapp\.com)/i
+        if (linkRegex.test(linkText)) {
+            detectedLinks.push('Link')
+        }
     }
 
     addDetection('group invite', Antilinkgc, /(?:https?:\/\/)?chat\.whatsapp\.com\/[\w-]+/i)
@@ -1828,12 +2121,6 @@ if (m.isGroup) {
     addDetection('Telegram', AntiLinkTelegram, /(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/[^\s]+/i)
     addDetection('TikTok', AntiLinkTiktok, /(?:https?:\/\/)?(?:www\.)?tiktok\.com\//i)
     addDetection('Twitter/X', AntiLinkTwitter, /(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\//i)
-
-    if (AntiLinkAll) {
-        const genericUrl = /(?:https?:\/\/|www\.)\S+/i
-        const domainUrl = /\b(?:[a-z0-9-]+\.)+(?:com|net|org|ng|co|me|io|ly|app|dev|xyz|info|biz|site|online|tv|cc|link)\b(?:\/\S*)?/i
-        if (genericUrl.test(linkText) || domainUrl.test(linkText)) detectedLinks.push('link')
-    }
 
     if (AntiStatus) {
         const quotedIsStatus = Boolean(
@@ -1874,68 +2161,283 @@ if (m.isGroup) {
         const hasStatus = detectedLinks.includes('WhatsApp status')
         const itemType = hasStatus ? 'Status' : 'Link'
 
-        // A member's own group link or status is not exempt: Anti-Link / Anti-Status means none allowed.
-        if (isAdmins || XeonTheCreator || m.key?.fromMe || XeonTheDeveloper) {
-            return await XeonBotInc.sendMessage(m.chat, {
-                text: hasStatus
-                    ? `📢 *Status Detected*\n\nAdmin has tagged/sent a status, admin is free to do so 😌`
-                    : `🔗 *Link Detected*\n\nAdmin has sent a link, admin is free to send any link 😌`
-            })
-        }
-
-        if (!isBotAdmins) {
-            return await XeonBotInc.sendMessage(m.chat, {
-                text: `⚠️ *Anti-${itemType} is enabled, but I am not a group admin.*\nPlease make the bot an admin so I can delete ${hasStatus ? 'status tags' : 'links'} and enforce the 3-warning system.`
-            })
-        }
-
-        const phoneSender = senderIds?.find(id => id.endsWith('@s.whatsapp.net')) || sender
-        const warningKey = `${m.chat}:${phoneSender}`
-        const currentStrike = Number(antiLinkWarnings[warningKey] || 0) + 1
-        antiLinkWarnings[warningKey] = currentStrike
-        saveAntiLinkWarnings()
-
-        try {
-            await XeonBotInc.sendMessage(m.chat, { delete: m.key })
-        } catch (err) {
-            // Older group messages may need an explicit participant field.
-            try {
+        // Admins and owners are exempt from anti-link actions
+        if (!isAdmins && !XeonTheCreator && !m.key?.fromMe && !XeonTheDeveloper) {
+            if (!isBotAdmins) {
                 await XeonBotInc.sendMessage(m.chat, {
-                    delete: {
-                        remoteJid: m.chat,
-                        fromMe: false,
-                        id: m.key.id,
-                        participant: m.key.participant || sender
+                    text: `⚠️ *Anti-${itemType} is enabled, but I am not a group admin.*\nPlease make the bot an admin so I can enforce anti-link rules.`
+                })
+            } else {
+                const phoneSender = senderIds?.find(id => id.endsWith('@s.whatsapp.net')) || sender
+                const mention = `@${String(phoneSender).split('@')[0]}`
+                const config = antilinkSettings[m.chat] || { mode: 'kick', maxWarn: 3 }
+                const mode = config.mode || 'kick'
+                const maxWarn = Number(config.maxWarn || 3)
+
+                if (!global.lastModerationNotifTime) global.lastModerationNotifTime = {}
+
+                if (mode === 'delete') {
+                    await deleteModerationMsg(m.chat, m.key)
+                    await purgeAllSenderMessages(m.chat, phoneSender, senderIds)
+                    return
+                } else if (mode === 'kick' || mode === 'on') {
+                    await deleteModerationMsg(m.chat, m.key)
+                    try {
+                        await XeonBotInc.groupParticipantsUpdate(m.chat, [phoneSender], 'remove')
+                    } catch (err) {}
+
+                    const purgedCount = await purgeAllSenderMessages(m.chat, phoneSender, senderIds)
+
+                    const notifKey = `${m.chat}:${phoneSender}:antilink`
+                    const now = Date.now()
+                    if (!global.lastModerationNotifTime[notifKey] || (now - global.lastModerationNotifTime[notifKey] > 15000)) {
+                        global.lastModerationNotifTime[notifKey] = now
+                        return await XeonBotInc.sendMessage(m.chat, {
+                            text: `🚫 *Anti-Link Action (Kick Mode)*\n\n${mention} sent a link and has been kicked from the group!\n🧹 *Bulk Purge:* Wiped out *${purgedCount || 1}* message(s) from this sender.`,
+                            mentions: [phoneSender]
+                        })
                     }
-                })
-            } catch (deleteErr) {
-                console.log(`[ANTI${itemType.toUpperCase()}] Could not delete message:`, deleteErr?.message || deleteErr)
+                    return
+                } else if (mode === 'warn') {
+                    await deleteModerationMsg(m.chat, m.key)
+                    await purgeAllSenderMessages(m.chat, phoneSender, senderIds)
+                    const warningKey = `${m.chat}:${phoneSender}`
+                    const currentStrike = Number(antiLinkWarnings[warningKey] || 0) + 1
+                    antiLinkWarnings[warningKey] = currentStrike
+                    saveAntiLinkWarnings()
+
+                    const notifKey = `${m.chat}:${phoneSender}:antilink`
+                    const now = Date.now()
+                    if (!global.lastModerationNotifTime[notifKey] || (now - global.lastModerationNotifTime[notifKey] > 15000)) {
+                        global.lastModerationNotifTime[notifKey] = now
+                        if (currentStrike >= maxWarn) {
+                            antiLinkWarnings[warningKey] = 0
+                            saveAntiLinkWarnings()
+                            try {
+                                await XeonBotInc.groupParticipantsUpdate(m.chat, [phoneSender], 'remove')
+                            } catch (err) {}
+
+                            return await XeonBotInc.sendMessage(m.chat, {
+                                text: `🚫 *Anti-Link Action (Warn Mode)*\n\n${mention} reached *${currentStrike}/${maxWarn} warnings* and has been removed from the group!`,
+                                mentions: [phoneSender]
+                            })
+                        } else {
+                            const remaining = maxWarn - currentStrike
+                            return await XeonBotInc.sendMessage(m.chat, {
+                                text: `⚠️ *Anti-Link Warning*\n\n${mention}, links are prohibited in this group!\n⚠️ Warning: *${currentStrike}/${maxWarn}*\n🚫 You have *${remaining}* warning(s) left before being removed.`,
+                                mentions: [phoneSender]
+                            })
+                        }
+                    }
+                    return
+                }
             }
         }
+    }
 
-        const mention = `@${String(phoneSender).split('@')[0]}`
-        if (currentStrike >= 3) {
-            try {
-                await XeonBotInc.groupParticipantsUpdate(m.chat, [phoneSender], 'remove')
-            } catch (err) {
-                console.log(`[ANTI${itemType.toUpperCase()}] Kick failed:`, err?.message || err)
-                return await XeonBotInc.sendMessage(m.chat, {
-                    text: `🚫 *${itemType} Detected*\n\n${mention} reached *3/3 warnings*, but I could not remove them. Please check that I still have admin permission.`,
-                    mentions: [phoneSender]
-                })
+    // Foreign Antibot Detection Handler with Bulk Purge & Debounced Notifications
+    if (!global.knownBotsInChat) global.knownBotsInChat = {}
+    if (!global.knownBotsInChat[m.chat]) global.knownBotsInChat[m.chat] = new Set()
+    if (!global.lastModerationNotifTime) global.lastModerationNotifTime = {}
+
+    const antibotCfg = antibotSettings[m.chat] || { mode: 'off', maxWarn: 3 }
+    if (m.isGroup && antibotCfg.mode !== 'off' && !isAdmins && !XeonTheCreator && !m.key.fromMe) {
+        const phoneSender = senderIds?.find(id => id.endsWith('@s.whatsapp.net')) || sender
+        const isKnownBot = global.knownBotsInChat[m.chat].has(sender) || 
+                           global.knownBotsInChat[m.chat].has(phoneSender) || 
+                           (senderIds && senderIds.some(id => global.knownBotsInChat[m.chat].has(id)))
+
+        const isForeignBot = isKnownBot || Boolean(
+            m.isBaileys ||
+            m.key.id?.startsWith('BAE5') ||
+            m.key.id?.startsWith('3EB0') ||
+            m.key.id?.startsWith('BOT') ||
+            m.key.id?.startsWith('XEON') ||
+            m.key.id?.startsWith('WAMID') ||
+            m.key.id?.startsWith('AKIRA') ||
+            m.key.id?.startsWith('B1E') ||
+            m.key.id?.startsWith('8SE') ||
+            m.key.id?.startsWith('XYZ') ||
+            m.key.id?.startsWith('ALPHA') ||
+            m.key.id?.startsWith('BETA') ||
+            m.key.id?.length === 12 ||
+            m.key.id?.length === 16 ||
+            m.key.id?.length === 18 ||
+            m.key.id?.length === 20 ||
+            m.key.id?.length === 22 ||
+            m.key.id?.length === 32 ||
+            (m.key.participant && String(m.key.participant).toLowerCase().includes('bot')) ||
+            (m.pushName && String(m.pushName).toLowerCase().includes('bot'))
+        )
+
+        if (isForeignBot) {
+            // Remember this sender as a known foreign bot in this chat
+            global.knownBotsInChat[m.chat].add(sender)
+            global.knownBotsInChat[m.chat].add(phoneSender)
+            if (senderIds && Array.isArray(senderIds)) {
+                senderIds.forEach(id => { if (id) global.knownBotsInChat[m.chat].add(id) })
             }
 
-            return await XeonBotInc.sendMessage(m.chat, {
-                text: `🚫 *${itemType} Detected*\n\n${mention} has reached *3/3 warnings* and has been removed from the group for repeatedly ${hasStatus ? 'tagging or sending status' : 'sending links'}.`,
-                mentions: [phoneSender]
-            })
+            if (!isBotAdmins) {
+                await deleteModerationMsg(m.chat, m.key)
+                const notifKey = `${m.chat}:noadmin:antibot`
+                const now = Date.now()
+                if (!global.lastModerationNotifTime[notifKey] || (now - global.lastModerationNotifTime[notifKey] > 30000)) {
+                    global.lastModerationNotifTime[notifKey] = now
+                    return await XeonBotInc.sendMessage(m.chat, {
+                        text: `🤖 ⚠️ *Foreign Bot Detected!*\nPlease make me an admin so I can remove unauthorized bots from this group.`
+                    })
+                }
+                return
+            }
+
+            const mention = `@${String(phoneSender).split('@')[0]}`
+            const mode = antibotCfg.mode || 'kick'
+            const maxWarn = Number(antibotCfg.maxWarn || 3)
+
+            if (mode === 'delete') {
+                await deleteModerationMsg(m.chat, m.key)
+                await purgeAllSenderMessages(m.chat, phoneSender, senderIds)
+                return
+            } else if (mode === 'kick' || mode === 'on') {
+                await deleteModerationMsg(m.chat, m.key)
+                try {
+                    await XeonBotInc.groupParticipantsUpdate(m.chat, [phoneSender], 'remove')
+                } catch (e) {}
+
+                const purgedCount = await purgeAllSenderMessages(m.chat, phoneSender, senderIds)
+
+                const notifKey = `${m.chat}:${phoneSender}:antibot`
+                const now = Date.now()
+                if (!global.lastModerationNotifTime[notifKey] || (now - global.lastModerationNotifTime[notifKey] > 15000)) {
+                    global.lastModerationNotifTime[notifKey] = now
+                    return await XeonBotInc.sendMessage(m.chat, {
+                        text: `🤖 🚨 *Foreign Bot Eliminated!*\n\n• *Target:* ${mention}\n• *Action:* Kicked from group\n• *Bulk Messages Purged:* *${purgedCount || 1}* message(s) wiped out!`,
+                        mentions: [phoneSender]
+                    })
+                }
+                return
+            } else if (mode === 'warn') {
+                await deleteModerationMsg(m.chat, m.key)
+                const purgedCount = await purgeAllSenderMessages(m.chat, phoneSender, senderIds)
+
+                const warningKey = `antibot:${m.chat}:${phoneSender}`
+                const currentStrike = Number(antiBotWarnings[warningKey] || 0) + 1
+                antiBotWarnings[warningKey] = currentStrike
+
+                const notifKey = `${m.chat}:${phoneSender}:antibot`
+                const now = Date.now()
+                if (!global.lastModerationNotifTime[notifKey] || (now - global.lastModerationNotifTime[notifKey] > 15000)) {
+                    global.lastModerationNotifTime[notifKey] = now
+                    if (currentStrike >= maxWarn) {
+                        antiBotWarnings[warningKey] = 0
+                        try {
+                            await XeonBotInc.groupParticipantsUpdate(m.chat, [phoneSender], 'remove')
+                        } catch (e) {}
+
+                        return await XeonBotInc.sendMessage(m.chat, {
+                            text: `🤖 🚨 *Foreign Bot Removed!*\n\n• *Target:* ${mention}\n• *Reason:* Reached *${currentStrike}/${maxWarn} warnings*`,
+                            mentions: [phoneSender]
+                        })
+                    } else {
+                        const remaining = maxWarn - currentStrike
+                        return await XeonBotInc.sendMessage(m.chat, {
+                            text: `🤖 ⚠️ *Anti-Bot Warning*\n\n${mention} (Foreign Bot) detected and message deleted!\n⚠️ Warning: *${currentStrike}/${maxWarn}*\n🚫 Unauthorized bot messages are restricted. *${remaining}* warning(s) left before removal.`,
+                            mentions: [phoneSender]
+                        })
+                    }
+                }
+                return
+            }
+        }
+    }
+
+    // Anti-Spam Rate Limit Detection Handler
+    if (!global.spamTracker) global.spamTracker = {}
+    if (!global.spamTracker[m.chat]) global.spamTracker[m.chat] = {}
+
+    const antispamCfg = antispamSettings[m.chat] || { mode: 'off', maxWarn: 3, limit: 3, timeframe: 1000 }
+    if (m.isGroup && antispamCfg.mode !== 'off' && !isAdmins && !XeonTheCreator && !m.key.fromMe) {
+        const phoneSender = senderIds?.find(id => id.endsWith('@s.whatsapp.net')) || sender
+        const now = Date.now()
+        const limit = Number(antispamCfg.limit || 3)
+        const timeframe = Number(antispamCfg.timeframe || 1000)
+
+        if (!global.spamTracker[m.chat][phoneSender]) {
+            global.spamTracker[m.chat][phoneSender] = []
         }
 
-        const remaining = 3 - currentStrike
-        return await XeonBotInc.sendMessage(m.chat, {
-            text: `⚠️ *${itemType} Detected*\n\n${mention}, ${hasStatus ? 'tagging or sending status is' : 'links are'} not allowed in this group.\n⚠️ Warning *${currentStrike}/3*\n${remaining} more violation${remaining === 1 ? '' : 's'} and you will be removed.`,
-            mentions: [phoneSender]
-        })
+        global.spamTracker[m.chat][phoneSender].push(now)
+        global.spamTracker[m.chat][phoneSender] = global.spamTracker[m.chat][phoneSender].filter(t => (now - t) <= timeframe)
+
+        if (global.spamTracker[m.chat][phoneSender].length >= limit) {
+            global.spamTracker[m.chat][phoneSender] = []
+
+            const mode = antispamCfg.mode || 'kick'
+            const maxWarn = Number(antispamCfg.maxWarn || 3)
+            const mention = `@${String(phoneSender).split('@')[0]}`
+
+            await deleteModerationMsg(m.chat, m.key)
+            const purgedCount = await purgeAllSenderMessages(m.chat, phoneSender, senderIds)
+
+            if (!isBotAdmins) {
+                const notifKey = `${m.chat}:noadmin:antispam`
+                if (!global.lastModerationNotifTime[notifKey] || (now - global.lastModerationNotifTime[notifKey] > 30000)) {
+                    global.lastModerationNotifTime[notifKey] = now
+                    return await XeonBotInc.sendMessage(m.chat, {
+                        text: `⚡ ⚠️ *Spam Detected!*\nPlease make me an admin so I can enforce anti-spam rules.`
+                    })
+                }
+                return
+            }
+
+            if (mode === 'delete') {
+                return
+            } else if (mode === 'kick' || mode === 'on') {
+                try {
+                    await XeonBotInc.groupParticipantsUpdate(m.chat, [phoneSender], 'remove')
+                } catch (err) {}
+
+                const notifKey = `${m.chat}:${phoneSender}:antispam`
+                if (!global.lastModerationNotifTime[notifKey] || (now - global.lastModerationNotifTime[notifKey] > 15000)) {
+                    global.lastModerationNotifTime[notifKey] = now
+                    return await XeonBotInc.sendMessage(m.chat, {
+                        text: `⚡ 🚨 *Anti-Spam Action (Kick Mode)*\n\n${mention} was detected spamming (*${limit}+ msgs in ${timeframe / 1000}s*) and has been kicked from the group!\n🧹 *Bulk Purge:* Wiped out *${purgedCount || limit}* spammed message(s).`,
+                        mentions: [phoneSender]
+                    })
+                }
+                return
+            } else if (mode === 'warn') {
+                const warningKey = `${m.chat}:${phoneSender}:spam`
+                const currentStrike = Number(antiSpamWarnings[warningKey] || 0) + 1
+                antiSpamWarnings[warningKey] = currentStrike
+                saveAntiSpamWarnings()
+
+                const notifKey = `${m.chat}:${phoneSender}:antispam`
+                if (!global.lastModerationNotifTime[notifKey] || (now - global.lastModerationNotifTime[notifKey] > 15000)) {
+                    global.lastModerationNotifTime[notifKey] = now
+                    if (currentStrike >= maxWarn) {
+                        antiSpamWarnings[warningKey] = 0
+                        saveAntiSpamWarnings()
+                        try {
+                            await XeonBotInc.groupParticipantsUpdate(m.chat, [phoneSender], 'remove')
+                        } catch (err) {}
+
+                        return await XeonBotInc.sendMessage(m.chat, {
+                            text: `⚡ 🚨 *Anti-Spam Action (Warn Mode)*\n\n${mention} reached *${currentStrike}/${maxWarn} spam warnings* and has been removed from the group!`,
+                            mentions: [phoneSender]
+                        })
+                    } else {
+                        const remaining = maxWarn - currentStrike
+                        return await XeonBotInc.sendMessage(m.chat, {
+                            text: `⚠️ *Anti-Spam Warning*\n\n${mention}, spamming is prohibited in this group! (*${limit}+ msgs in ${timeframe / 1000}s*)\n⚠️ Warning: *${currentStrike}/${maxWarn}*\n🚫 You have *${remaining}* warning(s) left before being removed.`,
+                            mentions: [phoneSender]
+                        })
+                    }
+                }
+                return
+            }
+        }
     }
 }
 
@@ -2109,10 +2611,10 @@ if (isCmd && command) {
         global.executedCommandsCache.set(msgKey, nowTimestamp);
     }
 
-    // 2. Command Rapid-Fire Spam / Echo Guard (Prevent identical command within 2500ms from the same sender in the same chat)
+    // 2. Command Rapid-Fire Spam / Echo Guard (Prevent identical command within 300ms from the same sender in the same chat)
     const cmdKey = `cmd_${m.chat}_${senderId}_${command}_${trimmedBody}`;
     const lastRunTime = global.executedCommandsCache.get(cmdKey);
-    if (lastRunTime && (nowTimestamp - lastRunTime) < 2500) {
+    if (lastRunTime && (nowTimestamp - lastRunTime) < 300) {
         console.log(`[AntiDuplicate] Blocked duplicate command run of "${command}" from ${senderId} (${nowTimestamp - lastRunTime}ms debounce)`);
         return;
     }
@@ -2221,17 +2723,152 @@ Type *surrender* to surrender and admit defeat`
             }
             break
 	case 'public': {
-                if (!XeonTheCreator) return XeonStickOwner()
+                if (!XeonTheCreator && !isCreator) return XeonStickOwner()
                 XeonBotInc.public = true
-                replygcxeon('*Successful in Changing To Public Usage*')
+                replygcxeon(`╔══════════════════════════╗\n  🌐 *𝗦𝗬𝗦𝗧𝗘𝗠  𝗠𝗢𝗗𝗘: 𝗣𝗨𝗕𝗟𝗜𝗖* 🌐\n\n  🟢 *Public access ENABLED!*\n  👥 *Everyone in groups and DMs can now use bot commands.*\n╚══════════════════════════╝`)
             }
             break
-            case 'self': {
-                if (!XeonTheCreator) return XeonStickOwner()
+            case 'self': case 'private': {
+                if (!XeonTheCreator && !isCreator) return XeonStickOwner()
                 XeonBotInc.public = false
-                replygcxeon('*Successful in Changing To Self Usage*')
+                replygcxeon(`╔══════════════════════════╗\n  🔒 *𝗦𝗬𝗦𝗧𝗘𝗠  𝗠𝗢𝗗𝗘: 𝗦𝗘𝗟𝗙 / 𝗣𝗥𝗜𝗩𝗔𝗧𝗘* 🔒\n\n  🛑 *All public command usage has been RESTRICTED!*\n  👑 *Only the Owner (Clinton - 2348029399425) and Bot can issue commands.*\n╚══════════════════════════╝`)
             }
             break
+
+case 'listgc': case 'listgroups': case 'groups': case 'grouplist': {
+    if (!XeonTheCreator && !isCreator) return XeonStickOwner()
+    XeonStickWait()
+    try {
+        const getGroups = await XeonBotInc.groupFetchAllParticipating()
+        const groups = Object.values(getGroups)
+        
+        if (!groups || groups.length === 0) {
+            return replygcxeon(`ℹ️ *No Active Groups Found!*\n\nThe bot is currently not participating in any WhatsApp groups.`)
+        }
+
+        global.cachedGroupCatalog = groups.map((g, index) => ({
+            num: index + 1,
+            id: g.id,
+            subject: g.subject || 'Unnamed Group',
+            size: g.participants ? g.participants.length : 0
+        }))
+
+        let txt = `╔══════════════════════════╗\n  ⚡ *𝗖𝗟𝗜𝗡𝗧𝗢𝗡  𝗨𝗟𝗧𝗥𝗔  𝗠𝗗* ⚡\n  🏰 *ACTIVE GROUPS CATALOG* 🚀\n╚══════════════════════════╝\n\n`
+        
+        global.cachedGroupCatalog.forEach((item) => {
+            txt += `${item.num}. 🏰 *${item.subject}*\n   └ 🆔 \`${item.id}\`\n   └ 👥 Members: *${item.size}*\n\n`
+        })
+
+        txt += `📊 *Total Groups:* *${groups.length}*\n\n`
+        txt += `📌 *Commands to Leave:*
+• *${prefix}leavegc 2* (Leaves group #2)
+• *${prefix}leavegc 2, 4, 15* (Leaves groups #2, #4, and #15)
+• *${prefix}leavegc all* OR *${prefix}leavegcall* (Leaves ALL groups at once)`
+
+        return replygcxeon(txt)
+    } catch (err) {
+        console.error('[LISTGC ERROR]', err)
+        return replygcxeon(`❌ *Failed to fetch group catalog:* ${err?.message || err}`)
+    }
+}
+break
+
+case 'leavegc': case 'leavegroup': case 'leavegcall': case 'leaveallgc': {
+    if (!XeonTheCreator && !isCreator) return XeonStickOwner()
+    
+    const isAll = command === 'leavegcall' || command === 'leaveallgc' || (text && text.toLowerCase().trim() === 'all')
+    
+    let groupsList = global.cachedGroupCatalog
+    if (!groupsList || groupsList.length === 0) {
+        try {
+            const getGroups = await XeonBotInc.groupFetchAllParticipating()
+            const rawGroups = Object.values(getGroups)
+            groupsList = rawGroups.map((g, index) => ({
+                num: index + 1,
+                id: g.id,
+                subject: g.subject || 'Unnamed Group',
+                size: g.participants ? g.participants.length : 0
+            }))
+            global.cachedGroupCatalog = groupsList
+        } catch (e) {}
+    }
+
+    if (!groupsList || groupsList.length === 0) {
+        return replygcxeon(`⚠️ *No groups found to leave.*`)
+    }
+
+    if (isAll) {
+        await replygcxeon(`🚨 *Initiating Mass Group Exit...*\n\n_Leaving all ${groupsList.length} participating groups one by one. Please hold tight..._`)
+        let leftCount = 0
+        for (const item of groupsList) {
+            try {
+                await XeonBotInc.groupLeave(item.id)
+                leftCount++
+                await sleep(1500)
+            } catch (err) {
+                console.error(`[LEAVE ALL ERROR for ${item.id}]`, err?.message || err)
+            }
+        }
+        global.cachedGroupCatalog = []
+        return replygcxeon(`✅ *Mass Group Exit Complete!*\n\nSuccessfully departed from *${leftCount}* groups.`)
+    }
+
+    if (!text) {
+        return replygcxeon(`⚠️ *Please specify group number(s) or 'all'*!\n\n*Examples:*
+• *${prefix}listgc* (View numbered group list first)
+• *${prefix}leavegc 2* (Leaves group #2)
+• *${prefix}leavegc 2, 4, 15* (Leaves groups #2, #4, and #15)
+• *${prefix}leavegc all* (Leaves ALL groups at once)`)
+    }
+
+    const numMatches = text.match(/\d+/g)
+    if (!numMatches || numMatches.length === 0) {
+        return replygcxeon(`⚠️ *Invalid group selection!* Please provide valid group numbers from *${prefix}listgc*.`)
+    }
+
+    const selectedIndices = numMatches.map(n => parseInt(n, 10))
+    const validTargets = []
+    const invalidNumbers = []
+
+    selectedIndices.forEach(num => {
+        const found = groupsList.find(g => g.num === num)
+        if (found) {
+            if (!validTargets.some(t => t.id === found.id)) validTargets.push(found)
+        } else {
+            invalidNumbers.push(num)
+        }
+    })
+
+    if (validTargets.length === 0) {
+        return replygcxeon(`❌ *None of the requested numbers (${selectedIndices.join(', ')}) matched active groups.* Please check *${prefix}listgc* for valid numbers.`)
+    }
+
+    await replygcxeon(`🚪 *Leaving ${validTargets.length} selected group(s)...*\n\n${validTargets.map(t => `• #${t.num}: *${t.subject}*`).join('\n')}`)
+
+    let successCount = 0
+    for (const target of validTargets) {
+        try {
+            await XeonBotInc.groupLeave(target.id)
+            successCount++
+            await sleep(1500)
+        } catch (err) {
+            console.error(`[LEAVE ERROR for ${target.subject}]`, err?.message || err)
+        }
+    }
+
+    try {
+        const fresh = await XeonBotInc.groupFetchAllParticipating()
+        global.cachedGroupCatalog = Object.values(fresh).map((g, index) => ({
+            num: index + 1,
+            id: g.id,
+            subject: g.subject || 'Unnamed Group',
+            size: g.participants ? g.participants.length : 0
+        }))
+    } catch (_) {}
+
+    return replygcxeon(`✅ *Group Exit Complete!* Successfully left *${successCount}* selected group(s).`)
+}
+break
             case 'autosavestatus': case 'savestatus': {
                 if (!XeonTheCreator) return XeonStickOwner()
                 const setting = global.db.settings[botNumber]
@@ -2816,7 +3453,7 @@ case 'checkprem': case 'myprem': case 'premium': {
     replygcxeon(statusText)
 }
 break
-case 'alive': case 'panel': case 'list': case 'menu': case 'help': case '?': {
+case 'alive': case 'panel': case 'categorymenu': case 'listmenu': {
 	        let ownernya = (global.ownernumber || ownernumber) + '@s.whatsapp.net'
             let me = m.sender
             let timestampe = speed()
@@ -2835,7 +3472,7 @@ case 'alive': case 'panel': case 'list': case 'menu': case 'help': case '?': {
 │𝗦𝗽𝗲𝗲𝗱 : ${latencyMs}ms
 │𝗥𝘂𝗻𝘁𝗶𝗺𝗲 : ${runtime(process.uptime())}
 │𝗕𝗼𝘁 : 𝘾𝙇𝙄𝙉𝙏𝙊𝙉 𝘽𝙊𝙏 𝙈𝘿8
-│𝗢𝘄𝗻𝗲𝗿 𝗡𝗼: ${global.ownernumber || ownernumber}
+│𝗢ｯ𝗻𝗲𝗿 𝗡𝗼: ${global.ownernumber || ownernumber}
 │𝗠𝗼𝗱𝗲 : ${XeonBotInc.public ? 'Public' : `Self`}
 │𝗣𝗹𝗮𝘁𝗳𝗼𝗿𝗺 : ${os.platform()}
 │
@@ -2851,24 +3488,24 @@ case 'alive': case 'panel': case 'list': case 'menu': case 'help': case '?': {
    │✑  Please Type The *MENU*
    │✑  Given *BELOW*
 ┌└─────────────┈ ⳹
-│❏.allmenu
-│❏.downloadmenu
-│❏.funmenu
-│❏.aimenu
-│❏.groupmenu
-│❏.ownermenu
-│❏.photooxymenu
-│❏.textpromenu
-│❏.ephoto360menu
-│❏.animemenu
-│❏.nsfwmenu
-│❏.randomphotomenu
-│❏.randomvideomenu
-│❏.stickermenu
-│❏.databasemenu
-│❏.stalkermenu
-│❏.bugmenu
-│❏.othermenu
+│ .allmenu
+│ .downloadmenu
+│ .funmenu
+│ .aimenu
+│ .groupmenu
+│ .ownermenu
+│ .photooxymenu
+│ .textpromenu
+│ .ephoto360menu
+│ .animemenu
+│ .nsfwmenu
+│ .randomphotomenu
+│ .randomvideomenu
+│ .stickermenu
+│ .databasemenu
+│ .stalkermenu
+│ .bugmenu
+│ .othermenu
 └─────────────────┈ ⳹
 
       ⚡ 𝙇𝙀𝙇𝙊𝙋 ⚡`
@@ -2878,24 +3515,24 @@ case 'alive': case 'panel': case 'list': case 'menu': case 'help': case '?': {
             }, { quoted: m })
         }
         break
-case 'allmenu': {
-sendXeonBotIncMessage(from, { 
-text: `Hi @${sender.split("@")[0]}\n\n${allmenu(prefix, hituet)}`,
-mentions:[sender],
-contextInfo:{
-mentionedJid:[sender],
-"externalAdReply": {
-"showAdAttribution": true,
-"renderLargerThumbnail": true,
-"title": botname, 
-"containsAutoReply": true,
-"mediaType": 1, 
-"thumbnail": fs.readFileSync("./XeonMedia/theme/cheemspic.jpg"),
-"mediaUrl": `${wagc}`,
-"sourceUrl": `${wagc}`
-}
-}
-})
+case 'allmenu': case 'menu': case 'help': case 'commands': case '?': {
+    await sendXeonBotIncMessage(from, { 
+        text: `Hi @${sender.split("@")[0]}\n\n${allmenu(prefix)}`,
+        mentions: [sender],
+        contextInfo: {
+            mentionedJid: [sender],
+            "externalAdReply": {
+                "showAdAttribution": true,
+                "renderLargerThumbnail": true,
+                "title": botname, 
+                "containsAutoReply": true,
+                "mediaType": 1, 
+                "thumbnail": fs.readFileSync("./XeonMedia/theme/cheemspic.jpg"),
+                "mediaUrl": `${wagc}`,
+                "sourceUrl": `${wagc}`
+            }
+        }
+    }, { quoted: m });
 }
 break
 case 'ownermenu': {
@@ -3956,7 +4593,8 @@ break
                  }
                  let teks = `${themeemoji} *GROUP CHAT LIST*\n\nTotal Group : ${anulistg.length} Group\n\n`
                  for (let i of anulistg) {
-                     let metadata = await XeonBotInc.groupMetadata(i)
+                     let metadata = await XeonBotInc.groupMetadata(i).catch(() => null)
+                     if (!metadata) continue
                      teks += `${themeemoji} *Name :* ${metadata.subject}\n${themeemoji} *Owner :* ${metadata.owner !== undefined ? '@' + metadata.owner.split`@`[0] : 'Unknown'}\n${themeemoji} *ID :* ${metadata.id}\n${themeemoji} *Made :* ${moment(metadata.creation * 1000).tz(global.timezone || 'Africa/Lagos').format('DD/MM/YYYY HH:mm:ss')}\n${themeemoji} *Member :* ${metadata.participants.length}\n\n────────────────────────\n\n`
                  }
                  XeonBotInc.sendTextWithMentions(m.chat, teks, m)
@@ -4628,33 +5266,243 @@ replygcxeon('Success in turning off twitter antilink in this group')
   }
   }
   break
+              case 'gstatus': {
+    const quotedMsg = m.quoted ? m.quoted : m
+    let mediaBuffer = null
+    let mime = quotedMsg?.mimetype || quotedMsg?.msg?.mimetype || ''
+    let captionText = quotedMsg?.text || quotedMsg?.caption || q || 'Group Status Update'
+
+    try {
+        if (quotedMsg && typeof quotedMsg.download === 'function') {
+            mediaBuffer = await quotedMsg.download().catch(() => null)
+        }
+        if (!mediaBuffer && m.quoted) {
+            mediaBuffer = await XeonBotInc.downloadMediaMessage(m.quoted).catch(() => null)
+        }
+        if (!mediaBuffer && m) {
+            mediaBuffer = await XeonBotInc.downloadMediaMessage(m).catch(() => null)
+        }
+    } catch (e) {}
+
+    let statusJidList = [m.sender]
+    if (m.isGroup) {
+        try {
+            let groupMeta = await XeonBotInc.groupMetadata(from).catch(() => null)
+            if (groupMeta && groupMeta.participants) {
+                statusJidList = groupMeta.participants.map(p => p.id)
+            }
+        } catch (e) {}
+    }
+    statusJidList = (statusJidList || [])
+        .map(j => {
+            const str = String(j || '')
+            if (str.endsWith('@s.whatsapp.net')) return str
+            if (/^\d+$/.test(str.split('@')[0])) return str.split('@')[0] + '@s.whatsapp.net'
+            return null
+        })
+        .filter(Boolean)
+    if (statusJidList.length === 0 && m.sender) {
+        const cleanSend = String(m.sender).split('@')[0].split(':')[0]
+        statusJidList = [cleanSend + '@s.whatsapp.net']
+    }
+
+    try {
+        if (mediaBuffer && /image/.test(mime)) {
+            let statusMsg = await XeonBotInc.sendMessage('status@broadcast', { image: mediaBuffer, caption: captionText }, { statusJidList })
+            global.lastGroupStatusKey = statusMsg?.key
+        } else if (mediaBuffer && /video/.test(mime)) {
+            let statusMsg = await XeonBotInc.sendMessage('status@broadcast', { video: mediaBuffer, caption: captionText }, { statusJidList })
+            global.lastGroupStatusKey = statusMsg?.key
+        } else {
+            let statusMsg = await XeonBotInc.sendMessage('status@broadcast', { text: captionText }, { statusJidList })
+            global.lastGroupStatusKey = statusMsg?.key
+        }
+    } catch (err) {
+        console.error('[GStatus Error]:', err)
+        try {
+            if (mediaBuffer && /image/.test(mime)) {
+                await XeonBotInc.sendMessage(from, { image: mediaBuffer, caption: captionText }, { quoted: m })
+            } else if (mediaBuffer && /video/.test(mime)) {
+                await XeonBotInc.sendMessage(from, { video: mediaBuffer, caption: captionText }, { quoted: m })
+            } else {
+                await XeonBotInc.sendMessage(from, { text: captionText }, { quoted: m })
+            }
+        } catch (e2) {}
+    }
+
+    replygcxeon(`✅ Group Status Uploaded Successfully!\n🎉 STATUS SENT TO: ${from}`)
+}
+break
+              case 'deletegstatus': case 'delgstatus': {
+    if (!m.isGroup) return replygcxeon('This command can only be used in groups!')
+    try {
+        if (global.lastGroupStatusKey) {
+            await XeonBotInc.sendMessage('status@broadcast', { delete: global.lastGroupStatusKey })
+            global.lastGroupStatusKey = null
+            replygcxeon('🗑️ *Group Status Deleted Successfully!*')
+        } else if (m.quoted) {
+            await XeonBotInc.sendMessage(m.chat, { delete: m.quoted.key })
+            replygcxeon('🗑️ *Quoted Status / Message Deleted Successfully!*')
+        } else {
+            replygcxeon('❌ No recent group status found to delete. Reply to the status message or upload one first.')
+        }
+    } catch (err) {
+        console.error('[Delete GStatus Error]:', err)
+        replygcxeon('❌ Failed to delete group status. Ensure bot has permission.')
+    }
+}
+break
               case 'antilink': case 'antilinkall': {
-if (!m.isGroup) return XeonStickGroup()
-if (!isBotAdmins) return XeonStickBotAdmin()
-if (!isAdmins && !XeonTheCreator) return XeonStickAdmin()
-if (args[0] === "on") {
-if (AntiLinkAll) return replygcxeon('Already activated')
-if (!ntilinkall.includes(from)) ntilinkall.push(from)
-fs.writeFileSync('./database/antilinkall.json', JSON.stringify(ntilinkall))
-replygcxeon('Success in turning on all antilink in this group')
-var groupe = await XeonBotInc.groupMetadata(from)
-var members = groupe['participants']
-var mems = []
-members.map(async adm => {
-mems.push(adm.id.replace('c.us', 's.whatsapp.net'))
-})
-XeonBotInc.sendMessage(from, {text: `\`\`\`「 ⚠️Warning⚠️ 」\`\`\`\n\nNo links are allowed for members. You get 3 warnings; the 3rd violation removes you from the group.`, contextInfo: { mentionedJid : mems }}, {quoted:m})
-} else if (args[0] === "off") {
-if (!AntiLinkAll) return replygcxeon('Already deactivated')
-let off = ntilinkall.indexOf(from)
-ntilinkall.splice(off, 1)
-fs.writeFileSync('./database/antilinkall.json', JSON.stringify(ntilinkall))
-replygcxeon('Success in turning off all antilink in this group')
-} else {
-  await replygcxeon(`Please Type The Option\n\nExample: ${prefix + command} on\nExample: ${prefix + command} off\n\non to enable\noff to disable`)
-  }
+    if (!m.isGroup) return XeonStickGroup()
+    if (!isBotAdmins) return XeonStickBotAdmin()
+    if (!isAdmins && !XeonTheCreator) return XeonStickAdmin()
+
+    const option = args[0]?.toLowerCase().trim()
+    const currentConfig = antilinkSettings[m.chat] || { mode: 'off', maxWarn: 3 }
+
+    if (option === 'on' || option === 'kick') {
+        antilinkSettings[m.chat] = { mode: 'kick', maxWarn: currentConfig.maxWarn || 3 }
+        saveAntilinkSettings()
+        if (!ntilinkall.includes(from)) ntilinkall.push(from)
+        try { fs.writeFileSync('./database/antilinkall.json', JSON.stringify(ntilinkall)) } catch (_) {}
+        return replygcxeon(`╔══════════════════════════╗\n  🔗 *𝗔𝗡𝗧𝗜-𝗟𝗜𝗡𝗞: 𝗞𝗜𝗖𝗞 𝗠𝗢𝗗𝗘* 🚨\n\n  🟢 *Activated in Kick Mode!*\n  🚫 *Links from non-admins will be deleted and the sender kicked immediately.*\n╚══════════════════════════╝`)
+    } else if (option === 'delete' || option === 'del') {
+        antilinkSettings[m.chat] = { mode: 'delete', maxWarn: currentConfig.maxWarn || 3 }
+        saveAntilinkSettings()
+        if (!ntilinkall.includes(from)) ntilinkall.push(from)
+        try { fs.writeFileSync('./database/antilinkall.json', JSON.stringify(ntilinkall)) } catch (_) {}
+        return replygcxeon(`╔══════════════════════════╗\n  🔗 *𝗔𝗡𝗧𝗜-𝗟𝗜𝗡𝗞: 𝔻𝔼𝕃𝔼𝕋𝔼 𝕄𝕆𝔻𝔼* 🗑️\n\n  🟢 *Activated in Delete-Only Mode!*\n  🚫 *Links sent by non-admins will be deleted automatically without kicking or warning.*\n╚══════════════════════════╝`)
+    } else if (option === 'warn' || option === 'warning') {
+        let warnLimit = parseInt(args[1], 10)
+        if (isNaN(warnLimit) || warnLimit < 1) warnLimit = currentConfig.maxWarn || 3
+        
+        antilinkSettings[m.chat] = { mode: 'warn', maxWarn: warnLimit }
+        saveAntilinkSettings()
+        if (!ntilinkall.includes(from)) ntilinkall.push(from)
+        try { fs.writeFileSync('./database/antilinkall.json', JSON.stringify(ntilinkall)) } catch (_) {}
+        return replygcxeon(`╔══════════════════════════╗\n  🔗 *𝗔𝗡𝗧𝗜-𝗟𝗜𝗡𝗞: 𝕎𝔸ℝℕ𝕀ℕ𝔾𝕊 𝕄𝕆𝔻𝔼* ⚠️\n\n  🟢 *Activated in Warn & Kick Mode!*\n  🚫 *Links will be deleted. Members get ${warnLimit} warning(s) before being kicked from the group.*\n╚══════════════════════════╝`)
+    } else if (option === 'off') {
+        antilinkSettings[m.chat] = { mode: 'off', maxWarn: currentConfig.maxWarn || 3 }
+        saveAntilinkSettings()
+        let off = ntilinkall.indexOf(from)
+        if (off !== -1) ntilinkall.splice(off, 1)
+        try { fs.writeFileSync('./database/antilinkall.json', JSON.stringify(ntilinkall)) } catch (_) {}
+        return replygcxeon(`╔══════════════════════════╗\n  🔗 *𝗔𝗡𝗧𝗜-𝗟𝗜𝗡𝗞: 𝔻𝕀𝕊𝔸𝔹𝕃𝔼𝔻* 🟢\n\n  ⚪ *Anti-link protection is now turned OFF for this group.*\n╚══════════════════════════╝`)
+    } else {
+        const currentMode = (currentConfig.mode || 'off').toUpperCase()
+        const currentMax = currentConfig.maxWarn || 3
+        return replygcxeon(`🔗 *Anti-Link Configuration Menu*\n\n*Current State:* *${currentMode}* (Max Warnings: *${currentMax}*)\n\n*Usage Options:*\n• *${prefix + command} kick* (or *on*) ➔ Delete link & kick immediately\n• *${prefix + command} delete* ➔ Delete link only (no kick/warn)\n• *${prefix + command} warn 3* ➔ Delete & warn (kicks after 3 warnings)\n• *${prefix + command} off* ➔ Disable anti-link protection`)
+    }
   }
   break
+
+case 'antibot': case 'antibots': {
+    if (!m.isGroup) return XeonStickGroup()
+    if (!isBotAdmins) return XeonStickBotAdmin()
+    if (!isAdmins && !XeonTheCreator) return XeonStickAdmin()
+
+    const option = args[0]?.toLowerCase().trim()
+    const currentConfig = antibotSettings[m.chat] || { mode: 'off', maxWarn: 3 }
+
+    if (option === 'on' || option === 'kick') {
+        antibotSettings[m.chat] = { mode: 'kick', maxWarn: currentConfig.maxWarn || 3 }
+        saveAntibotSettings()
+        return replygcxeon(`╔══════════════════════════╗\n  🤖 *𝗔𝗡𝗧𝗜-𝗕𝗢𝗧: 𝗞𝗜𝗖𝗞 𝗠𝗢𝗗𝗘* 🚨\n\n  🟢 *Activated in Kick Mode!*\n  🚫 *Foreign bot messages will be deleted and the bot removed from the group immediately.*\n╚══════════════════════════╝`)
+    } else if (option === 'delete' || option === 'del') {
+        antibotSettings[m.chat] = { mode: 'delete', maxWarn: currentConfig.maxWarn || 3 }
+        saveAntibotSettings()
+        return replygcxeon(`╔══════════════════════════╗\n  🤖 *𝗔𝗡𝗧𝗜-𝗕𝗢𝗧: 𝔻𝔼𝕃𝔼𝕋𝔼 𝕄𝕆𝔻𝔼* 🗑️\n\n  🟢 *Activated in Delete-Only Mode!*\n  🚫 *Foreign bot messages will be deleted automatically in bulk without kicking or warning.*\n╚══════════════════════════╝`)
+    } else if (option === 'warn' || option === 'warning') {
+        let warnLimit = parseInt(args[1], 10)
+        if (isNaN(warnLimit) || warnLimit < 1) warnLimit = currentConfig.maxWarn || 3
+
+        antibotSettings[m.chat] = { mode: 'warn', maxWarn: warnLimit }
+        saveAntibotSettings()
+        return replygcxeon(`╔══════════════════════════╗\n  🤖 *𝗔𝗡𝗧𝗜-𝗕𝗢𝗧: 𝕎𝔸ℝℕ𝕀ℕ𝔾𝕊 𝕄𝕆𝔻𝔼* ⚠️\n\n  🟢 *Activated in Warn & Remove Mode!*\n  🚫 *Foreign bot messages will be deleted. Bots get ${warnLimit} warning(s) before removal.*\n╚══════════════════════════╝`)
+    } else if (option === 'off') {
+        antibotSettings[m.chat] = { mode: 'off', maxWarn: currentConfig.maxWarn || 3 }
+        saveAntibotSettings()
+        return replygcxeon(`╔══════════════════════════╗\n  🤖 *𝗔𝗡𝗧𝗜-𝗕𝗢𝗧: 𝔻𝕀𝕊𝔸𝔹𝕃𝔼𝔻* 🟢\n\n  ⚪ *Anti-bot protection is now turned OFF for this group.*\n╚══════════════════════════╝`)
+    } else {
+        const currentMode = (currentConfig.mode || 'off').toUpperCase()
+        const currentMax = currentConfig.maxWarn || 3
+        return replygcxeon(`🤖 *Anti-Bot Configuration Menu*\n\n*Current State:* *${currentMode}* (Max Warnings: *${currentMax}*)\n\n*Usage Options:*\n• *${prefix + command} kick* (or *on*) ➔ Delete bot messages & remove bot immediately\n• *${prefix + command} delete* ➔ Delete all bot messages in bulk (no kick/warn)\n• *${prefix + command} warn 3* ➔ Delete & warn bot (removes bot after specified warnings)\n• *${prefix + command} off* ➔ Disable anti-bot protection`)
+    }
+}
+break
+
+case 'antispam': case 'antispams': {
+    if (!m.isGroup) return XeonStickGroup()
+    if (!isBotAdmins) return XeonStickBotAdmin()
+    if (!isAdmins && !XeonTheCreator) return XeonStickAdmin()
+
+    const option = args[0]?.toLowerCase().trim()
+    const currentConfig = antispamSettings[m.chat] || { mode: 'off', maxWarn: 3, limit: 3, timeframe: 1000 }
+
+    if (option === 'on' || option === 'kick') {
+        antispamSettings[m.chat] = { 
+            mode: 'kick', 
+            maxWarn: currentConfig.maxWarn || 3,
+            limit: currentConfig.limit || 3,
+            timeframe: currentConfig.timeframe || 1000
+        }
+        saveAntispamSettings()
+        return replygcxeon(`╔══════════════════════════╗\n  ⚡ *𝗔𝗡𝗧𝗜-𝗦𝗣𝗔𝗠: 𝗞𝗜𝗖𝗞 𝗠𝗢𝗗𝗘* 🚨\n\n  🟢 *Activated in Kick Mode!*\n  🚫 *Senders exceeding rate limit (${currentConfig.limit || 3} msgs in ${(currentConfig.timeframe || 1000) / 1000}s) will have messages deleted and be kicked immediately.*\n╚══════════════════════════╝`)
+    } else if (option === 'delete' || option === 'del') {
+        antispamSettings[m.chat] = { 
+            mode: 'delete', 
+            maxWarn: currentConfig.maxWarn || 3,
+            limit: currentConfig.limit || 3,
+            timeframe: currentConfig.timeframe || 1000
+        }
+        saveAntispamSettings()
+        return replygcxeon(`╔══════════════════════════╗\n  ⚡ *𝗔𝗡𝗧𝗜-𝗦𝗣𝗔𝗠: 𝔻𝔼𝕃𝔼𝕋𝔼 𝕄𝕆𝔻𝔼* 🗑️\n\n  🟢 *Activated in Delete-Only Mode!*\n  🚫 *Spam messages (${currentConfig.limit || 3} msgs in ${(currentConfig.timeframe || 1000) / 1000}s) will be wiped in bulk without kicking or warning.*\n╚══════════════════════════╝`)
+    } else if (option === 'warn' || option === 'warning') {
+        let warnLimit = parseInt(args[1], 10)
+        if (isNaN(warnLimit) || warnLimit < 1) warnLimit = currentConfig.maxWarn || 3
+
+        antispamSettings[m.chat] = { 
+            mode: 'warn', 
+            maxWarn: warnLimit,
+            limit: currentConfig.limit || 3,
+            timeframe: currentConfig.timeframe || 1000
+        }
+        saveAntispamSettings()
+        return replygcxeon(`╔══════════════════════════╗\n  ⚡ *𝗔𝗡𝗧𝗜-𝗦𝗣𝗔𝗠: 𝕎𝔸ℝℕ𝕀ℕ𝔾𝕊 𝕄𝕆𝔻𝔼* ⚠️\n\n  🟢 *Activated in Warn & Kick Mode!*\n  🚫 *Spam messages will be deleted. Senders get ${warnLimit} warning(s) before removal.*\n╚══════════════════════════╝`)
+    } else if (option === 'set' || option === 'config' || option === 'rate') {
+        let msgCount = parseInt(args[1], 10)
+        let secWindow = parseFloat(args[2] || '1')
+        if (isNaN(msgCount) || msgCount < 2) msgCount = 3
+        if (isNaN(secWindow) || secWindow <= 0) secWindow = 1
+
+        const msWindow = Math.round(secWindow * 1000)
+        antispamSettings[m.chat] = {
+            mode: currentConfig.mode === 'off' ? 'kick' : currentConfig.mode,
+            maxWarn: currentConfig.maxWarn || 3,
+            limit: msgCount,
+            timeframe: msWindow
+        }
+        saveAntispamSettings()
+        return replygcxeon(`╔══════════════════════════╗\n  ⚡ *𝗔𝗡𝗧𝗜-𝗦𝗣𝗔𝗠: ℂ𝕌𝕊𝕋𝕆𝕄 ℝ𝔸𝕋𝔼* ⚙️\n\n  🟢 *Spam Threshold Updated!*\n  📊 *Trigger:* ${msgCount} messages within ${secWindow} second(s).\n  🛡️ *Active Mode:* ${(antispamSettings[m.chat].mode || 'KICK').toUpperCase()}\n╚══════════════════════════╝`)
+    } else if (option === 'off') {
+        antispamSettings[m.chat] = { 
+            mode: 'off', 
+            maxWarn: currentConfig.maxWarn || 3,
+            limit: currentConfig.limit || 3,
+            timeframe: currentConfig.timeframe || 1000
+        }
+        saveAntispamSettings()
+        return replygcxeon(`╔══════════════════════════╗\n  ⚡ *𝗔𝗡𝗧𝗜-𝗦𝗣𝗔𝗠: 𝔻𝕀𝕊𝔸𝔹𝕃𝔼𝔻* 🟢\n\n  ⚪ *Anti-spam protection is now turned OFF for this group.*\n╚══════════════════════════╝`)
+    } else {
+        const currentMode = (currentConfig.mode || 'off').toUpperCase()
+        const currentMax = currentConfig.maxWarn || 3
+        const currentLimit = currentConfig.limit || 3
+        const currentSec = (currentConfig.timeframe || 1000) / 1000
+        return replygcxeon(`⚡ *Anti-Spam Configuration Menu*\n\n*Current State:* *${currentMode}*\n*Threshold:* *${currentLimit} msgs* in *${currentSec}s*\n*Max Warnings:* *${currentMax}*\n\n*Usage Options:*\n• *${prefix + command} kick* (or *on*) ➔ Delete spam & kick immediately\n• *${prefix + command} delete* ➔ Wipe spam messages in bulk (no kick/warn)\n• *${prefix + command} warn 3* ➔ Delete & warn spammer (kicks after 3 warnings)\n• *${prefix + command} set 3 1* ➔ Set rate threshold (e.g., 3 msgs in 1 sec)\n• *${prefix + command} off* ➔ Disable anti-spam protection`)
+    }
+}
+break
+
 case 'antitoxic': case 'antibadword': {
 if (!m.isGroup) return XeonStickGroup()
 if (!isBotAdmins) return XeonStickBotAdmin()
@@ -4770,12 +5618,63 @@ await replygcxeon(`Please Type The Option\n\nExample: ${prefix + command} on\nEx
             }
             break
 case 'add': {
-if (!m.isGroup) return XeonStickGroup()
-if (!isBotAdmins) return XeonStickBotAdmin()
-if (!XeonTheCreator) return XeonStickOwner()
-let users = m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '')+'@s.whatsapp.net'
-await XeonBotInc.groupParticipantsUpdate(m.chat, [users], 'add')
-await replygcxeon(`Done`)
+    if (!m.isGroup) return XeonStickGroup()
+    if (!isBotAdmins) return XeonStickBotAdmin()
+    if (!isAdmins && !XeonTheCreator) return XeonStickAdmin()
+
+    let rawTarget = m.quoted ? m.quoted.sender : (m.mentionedJid && m.mentionedJid[0] ? m.mentionedJid[0] : text)
+    if (!rawTarget) return replygcxeon(`⚠️ *Please specify a number, tag a user, or reply to a message to add them!*`)
+
+    let targetJid = await normalizeAndValidateJid(rawTarget)
+    if (!targetJid) return replygcxeon(`❌ *Invalid phone number or WhatsApp user not found!*`)
+
+    try {
+        const res = await XeonBotInc.groupParticipantsUpdate(m.chat, [targetJid], 'add')
+        const addResult = res?.[0] || {}
+
+        if (addResult.status === '200' || addResult.status === 200) {
+            return replygcxeon(`✅ *Successfully added @${targetJid.split('@')[0]} to the group!*`, { mentions: [targetJid] })
+        } else if (addResult.status === '403' || addResult.status === '408' || addResult.status === 403 || addResult.status === 408) {
+            let inviteCode = ''
+            try { inviteCode = await XeonBotInc.groupInviteCode(m.chat) } catch (_) {}
+            
+            let groupPp = null
+            try { groupPp = await XeonBotInc.profilePictureUrl(m.chat, 'image') } catch (_) {}
+            let thumbBuffer
+            try { thumbBuffer = groupPp ? await getBuffer(groupPp) : fs.readFileSync('./XeonMedia/theme/cheemspic.jpg') } catch (_) {}
+
+            const groupName = groupMetadata?.subject || 'WhatsApp Group'
+
+            try {
+                // 1. Send Native WhatsApp Group Invite Payload to DM
+                await XeonBotInc.sendMessage(targetJid, {
+                    groupInviteMessage: {
+                        groupJid: m.chat,
+                        inviteCode: inviteCode,
+                        inviteExpiration: Math.floor(Date.now() / 1000) + (3 * 86400),
+                        groupName: groupName,
+                        caption: `You have been invited to join ${groupName}!`,
+                        jpegThumbnail: thumbBuffer
+                    }
+                })
+
+                // 2. Direct Link Fallback Text
+                await XeonBotInc.sendMessage(targetJid, {
+                    text: `🏰 *You have been invited to join ${groupName}!*\n\n🔗 *Join Link:* https://chat.whatsapp.com/${inviteCode}`
+                })
+
+                return replygcxeon(`📩 *@${targetJid.split('@')[0]}'s privacy settings prevent adding them directly. An official invitation card has been sent to their DM!*`, { mentions: [targetJid] })
+            } catch (dmErr) {
+                return replygcxeon(`⚠️ *Could not add @${targetJid.split('@')[0]} directly due to privacy restrictions.*\n🔗 *Group Link:* https://chat.whatsapp.com/${inviteCode}`, { mentions: [targetJid] })
+            }
+        } else {
+            return replygcxeon(`✅ *Processed invitation request for @${targetJid.split('@')[0]}.*`, { mentions: [targetJid] })
+        }
+    } catch (addErr) {
+        let inviteCode = ''
+        try { inviteCode = await XeonBotInc.groupInviteCode(m.chat) } catch (_) {}
+        return replygcxeon(`⚠️ *Unable to add participant directly. Share this link:* https://chat.whatsapp.com/${inviteCode}`)
+    }
 }
 break
 case 'closetime': {
@@ -5901,7 +6800,6 @@ const cleanSenderDig = cleanPhone(m.sender) || cleanPhone(sender)
 const isLegitOwner = XeonTheCreator || 
     cleanSenderDig === '2348160208114' || 
     cleanSenderDig === '2348029399425' || 
-    cleanSenderDig === '68444699525143' ||
     (args[0] && (args[0].includes('2348160208114') || args[0].toLowerCase() === 'clinton'))
 
 if (!isLegitOwner) return replygcxeon(`👑 Owner verification failed. Only the authorized owner can claim ownership.`)
@@ -8109,8 +9007,8 @@ break
           case 'emojimix': {
 		let [emoji1, emoji2] = text.split`+`
 		if (!emoji1) return replygcxeon(`Example : ${prefix + command} 😅+🤔`)
-		if (!emoji2) return replygcxeon(`Example : ${prefix + command} 😅+🤔`)
-		let anumojimix = await fetchJson(`https://tenor.googleapis.com/v2/featured?key=AIzaSyAyimkuYQYF_FXVALexPuGQctUWRURdCYQ&contentfilter=high&media_filter=png_transparent&component=proactive&collection=emoji_kitchen_v5&q=${encodeURIComponent(emoji1)}_${encodeURIComponent(emoji2)}`)
+		const tenorKey = process.env.TENOR_API_KEY || ''
+		let anumojimix = await fetchJson(`https://tenor.googleapis.com/v2/featured?key=${tenorKey}&contentfilter=high&media_filter=png_transparent&component=proactive&collection=emoji_kitchen_v5&q=${encodeURIComponent(emoji1)}_${encodeURIComponent(emoji2)}`)
 		for (let res of anumojimix.results) {
 		    let encmedia = await XeonBotInc.sendImageAsSticker(m.chat, res.url, m, { packname: global.packname, author: global.author, categories: res.tags })
 		    
@@ -9563,6 +10461,45 @@ try {
 }
 }
 break
+    case 'translate': case 'tr': {
+        const textToTranslate = m.quoted?.text || m.quoted?.caption || q
+        if (!textToTranslate) return replygcxeon(`Please reply to a text message or type text to translate!\nExample: ${prefix}translate Hello`)
+        
+        try {
+            const prompt = `You are a professional translation assistant. Detect the source language of the following text, and translate it into English.
+Output your response in exact JSON format:
+{
+  "detectedLanguage": "Name of detected language (e.g. Spanish, French, Arabic, Hindi, etc.)",
+  "translation": "The English translation"
+}
+Text to translate: "${textToTranslate}"`;
+
+            const geminiRes = await askGemini(prompt, { systemInstruction: 'You are a translation assistant. Always respond with valid JSON containing detectedLanguage and translation.' });
+            
+            let parsed;
+            try {
+                let cleanJson = geminiRes.replace(/```json/g, '').replace(/```/g, '').trim();
+                parsed = JSON.parse(cleanJson);
+            } catch (e) {
+                parsed = {
+                    detectedLanguage: 'Auto-Detected',
+                    translation: geminiRes
+                };
+            }
+
+            const trResult = `🌐 *GEMINI TRANSLATION (3.5 FLASH)* 🌐
+
+🗣️ *Detected Language:* ${parsed.detectedLanguage || 'Auto-Detected'}
+🇬🇧 *Translated to English:*
+${parsed.translation || geminiRes}
+`;
+            replygcxeon(trResult)
+        } catch (err) {
+            console.error('[Gemini Translate Error]:', err)
+            replygcxeon('❌ Translation failed using Gemini API. Please check your Gemini API key.')
+        }
+    }
+    break
     case 'say': case 'tts': case 'gtts':{
         if (!text) return replygcxeon(`💬 *Usage:* ${prefix + command} <text>\n*Example:* ${prefix + command} hello`)
         try {
@@ -9594,7 +10531,7 @@ function __lobz(){const H=['R53FWbciV9','reply','rbot_18407','\x5c(\x20*\x5c)','
         return replygcxeon(`${themeemoji} *Fact:* ${data.fact}\n`)   
     }
     break
-    case 'gemini': case 'ai': case 'openai': case 'chatgpt': case 'gpt': case 'bard': case 'ask': {
+    case 'gemini': case 'ai': case 'bard': case 'ask': {
         const queryText = q || text || ''
         const isQuoted = Boolean(m.quoted)
         const isImg = type === 'imageMessage' || isQuotedImage
@@ -9627,7 +10564,28 @@ function __lobz(){const H=['R53FWbciV9','reply','rbot_18407','\x5c(\x20*\x5c)','
             return replygcxeon(reply)
         } catch (error) {
             console.error('[Gemini AI Error]', error)
+            if (error?.message === 'KEY_MISSING_GEMINI') {
+                return replygcxeon(`⚠️ *Google Gemini API Key is missing!*\n\nPlease configure your Gemini key to activate this engine by typing:\n\n\`${prefix}setkey gemini = [your key]\``)
+            }
             return replygcxeon(`❌ *Gemini AI Error:* ${error?.message || error}`)
+        }
+    }
+    break
+    case 'openai': case 'chatgpt': case 'gpt': {
+        const queryText = q || text || ''
+        if (!queryText) {
+            return replygcxeon(`🤖 *ChatGPT (OpenAI)*\n\nUsage:\n• ${prefix + command} <your question/prompt>`)
+        }
+
+        try {
+            const reply = await askChatGPT(queryText)
+            return replygcxeon(reply)
+        } catch (error) {
+            console.error('[ChatGPT AI Error]', error)
+            if (error?.message === 'KEY_MISSING_OPENAI') {
+                return replygcxeon(`⚠️ *OpenAI / ChatGPT API Key is missing!*\n\nPlease configure your OpenAI key to activate this engine by typing:\n\n\`${prefix}setkey openai = [your key]\``)
+            }
+            return replygcxeon(`❌ *ChatGPT AI Error:* ${error?.message || error}`)
         }
     }
     break
@@ -9637,13 +10595,15 @@ function __lobz(){const H=['R53FWbciV9','reply','rbot_18407','\x5c(\x20*\x5c)','
         
         replygcxeon('🎨 *Generating AI image, please wait...*')
         try {
-            const imgBuffer = await generateGeminiImage(queryPrompt)
+            const result = await generateGeminiImage(queryPrompt)
+            const imgBuffer = result.buffer
+            const creatorCaption = result.engine
             if (!imgBuffer || !Buffer.isBuffer(imgBuffer)) {
                 throw new Error('Image generation engine returned invalid data.')
             }
             await XeonBotInc.sendMessage(m.chat, {
                 image: imgBuffer,
-                caption: `✨ *Prompt:* ${queryPrompt}\n🤖 *Generated by:* _Cheems AI_`
+                caption: `✨ *Prompt:* ${queryPrompt}\n🤖 *Generated by:* _${creatorCaption}_`
             }, { quoted: m })
         } catch (err) {
             console.error('[AI Image Error]', err)
@@ -9671,6 +10631,239 @@ ${prefix + command} explain quantum computing simply`)
         }
     }
     break
+case 'allvar': case 'allvars': case 'getvars': case 'getvar': {
+    if (!XeonTheCreator && !isCreator) return XeonStickOwner()
+    const ALLOWED_VARS_LIST = {
+        'autoReading': { type: 'boolean', desc: 'Auto presence recording' },
+        'autoTyping': { type: 'boolean', desc: 'Auto status typing update' },
+        'autoRecord': { type: 'boolean', desc: 'Auto status recording update' },
+        'autoblockmorroco': { type: 'boolean', desc: 'Auto block country code 212' },
+        'autokickmorroco': { type: 'boolean', desc: 'Auto kick country code 212 from groups' },
+        'antispam': { type: 'boolean', desc: 'Enable / disable global antispam protection' },
+        'usePairingCode': { type: 'boolean', desc: 'Use 8-digit Pairing Code instead of QR' },
+        'enableWebDashboard': { type: 'boolean', desc: 'Run Express Web dashboard on port 3000' },
+        'botname': { type: 'string', desc: 'Active display name of the bot' },
+        'ownername': { type: 'string', desc: 'Active name of the bot owner' },
+        'ownernomer': { type: 'string', desc: 'Primary owner WhatsApp phone number' },
+        'timezone': { type: 'string', desc: 'Active system time zone (e.g. Africa/Lagos)' },
+        'themeemoji': { type: 'string', desc: 'Primary dynamic emoji theme' },
+        'packname': { type: 'string', desc: 'Metadata pack name for sticker generation' },
+        'author': { type: 'string', desc: 'Metadata author name for sticker generation' },
+        'wm': { type: 'string', desc: 'Footer watermark text' },
+        'location': { type: 'string', desc: 'Display location metadata' }
+    }
+    let listText = `⚙️ *CLINTON BOT ULTRA MD — DYNAMIC VARIABLES*\n\n`
+    for (const [key, meta] of Object.entries(ALLOWED_VARS_LIST)) {
+        const val = global[key]
+        let valStr = val === undefined ? '_Not Configured_' : `\`${val}\``
+        if (typeof val === 'boolean') {
+            valStr = val ? '🟢 *True*' : '🔴 *False*'
+        }
+        listText += `• *${key}* (${meta.type})\n  _Active:_ ${valStr}\n  _Info:_ ${meta.desc}\n\n`
+    }
+    listText += `💡 _To change any setting, use:_ \n*${prefix}setvar <variable_name> = <value>*\n_Example:_ \`*${prefix}setvar autoTyping = false*\``
+    return replygcxeon(listText)
+}
+break
+case 'setvar': {
+    if (!XeonTheCreator && !isCreator) return XeonStickOwner()
+    const ALLOWED_VARS_LIST = {
+        'autoReading': { type: 'boolean', desc: 'Auto presence recording' },
+        'autoTyping': { type: 'boolean', desc: 'Auto status typing update' },
+        'autoRecord': { type: 'boolean', desc: 'Auto status recording update' },
+        'autoblockmorroco': { type: 'boolean', desc: 'Auto block country code 212' },
+        'autokickmorroco': { type: 'boolean', desc: 'Auto kick country code 212 from groups' },
+        'antispam': { type: 'boolean', desc: 'Enable / disable global antispam protection' },
+        'usePairingCode': { type: 'boolean', desc: 'Use 8-digit Pairing Code instead of QR' },
+        'enableWebDashboard': { type: 'boolean', desc: 'Run Express Web dashboard on port 3000' },
+        'botname': { type: 'string', desc: 'Active display name of the bot' },
+        'ownername': { type: 'string', desc: 'Active name of the bot owner' },
+        'ownernomer': { type: 'string', desc: 'Primary owner WhatsApp phone number' },
+        'timezone': { type: 'string', desc: 'Active system time zone (e.g. Africa/Lagos)' },
+        'themeemoji': { type: 'string', desc: 'Primary dynamic emoji theme' },
+        'packname': { type: 'string', desc: 'Metadata pack name for sticker generation' },
+        'author': { type: 'string', desc: 'Metadata author name for sticker generation' },
+        'wm': { type: 'string', desc: 'Footer watermark text' },
+        'location': { type: 'string', desc: 'Display location metadata' }
+    }
+    const input = q || text || args.join(' ')
+    if (!input) {
+        return replygcxeon(`⚙️ *Set Dynamic Variable*
+        
+Usage:
+• ${prefix}setvar <name> = <value>
+• ${prefix}setvar <name> <value>
+
+Example:
+• ${prefix}setvar botname = Clinton Bot Ultra V2
+• ${prefix}setvar autoTyping = false
+
+💡 Send *${prefix}allvar* to view all editable settings.`)
+    }
+
+    let varName = ''
+    let varValueRaw = ''
+
+    if (input.includes('=')) {
+        const parts = input.split('=')
+        varName = parts[0].trim()
+        varValueRaw = parts.slice(1).join('=').trim()
+    } else {
+        const parts = input.split(' ')
+        varName = parts[0].trim()
+        varValueRaw = parts.slice(1).join(' ').trim()
+    }
+
+    const targetMeta = ALLOWED_VARS_LIST[varName]
+    if (!targetMeta) {
+        return replygcxeon(`❌ *Invalid Variable Name:* \`${varName}\`\n\nSend *${prefix}allvar* to view the complete list of valid variables.`)
+    }
+
+    if (!varValueRaw) {
+        return replygcxeon(`❌ *Value is required!* Please specify the new value for \`${varName}\`.`)
+    }
+
+    let parsedValue = varValueRaw
+    if (targetMeta.type === 'boolean') {
+        const lowered = varValueRaw.toLowerCase()
+        if (lowered === 'true' || lowered === 'yes' || lowered === 'on' || lowered === '1') {
+            parsedValue = true
+        } else if (lowered === 'false' || lowered === 'no' || lowered === 'off' || lowered === '0') {
+            parsedValue = false
+        } else {
+            return replygcxeon(`❌ *Value mismatch:* \`${varName}\` requires a boolean value (\`true\` or \`false\`). You supplied \`${varValueRaw}\`.`)
+        }
+    } else if (targetMeta.type === 'number') {
+        parsedValue = parseFloat(varValueRaw)
+        if (isNaN(parsedValue)) {
+            return replygcxeon(`❌ *Value mismatch:* \`${varName}\` requires a valid number. You supplied \`${varValueRaw}\`.`)
+        }
+    }
+
+    global[varName] = parsedValue
+    if (varName === 'ownernomer') {
+        global.ownernumber = parsedValue
+    }
+
+    const overrideFile = path.join(__dirname, 'database/settings_override.json')
+    let currentOverrides = {}
+    try {
+        if (fs.existsSync(overrideFile)) {
+            currentOverrides = JSON.parse(fs.readFileSync(overrideFile, 'utf8'))
+        }
+    } catch (_) {}
+
+    currentOverrides[varName] = parsedValue
+    
+    try {
+        const dbDir = path.dirname(overrideFile)
+        if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true })
+        fs.writeFileSync(overrideFile, JSON.stringify(currentOverrides, null, 4))
+    } catch (err) {
+        console.error('[SETVAR PERSISTENCE ERROR]', err)
+        return replygcxeon(`⚠️ *Variable modified at runtime, but failed to persist:* ${err?.message || err}`)
+    }
+
+    let displayVal = typeof parsedValue === 'boolean' ? (parsedValue ? '🟢 *True*' : '🔴 *False*') : `\`${parsedValue}\``
+    return replygcxeon(`✅ *Setting Updated Successfully!*\n\n• *Variable:* \`${varName}\`\n• *New Value:* ${displayVal}\n\n⚙️ Changes took effect immediately and are stored permanently.`)
+}
+break
+case 'restart': case 'reboot': case 'restartbot': {
+    if (!XeonTheCreator && !isCreator) return XeonStickOwner()
+    await replygcxeon(`🔄 *Restarting Bot...*\n\n_Please wait a few seconds for the process to reboot and re-establish connection..._`)
+    await sleep(2000)
+    process.exit(0)
+}
+break
+case 'clearcache': case 'clearsession': {
+    if (!XeonTheCreator && !isCreator) return XeonStickOwner()
+    await replygcxeon(`🧹 *Initiating Deep Session Purge...*\n\n_Clearing all corrupted prekeys, app states, and senderkey caches while keeping login credentials safe..._`)
+    await sleep(2000)
+    try {
+        const { repairSessionFolder } = require('./lib/sessionCleaner')
+        const result = repairSessionFolder('./session', { clearKeysOnly: true })
+        await replygcxeon(`✅ *Session Cache Purged!* Removed ${result.removed} desynced prekey files.\n\n🔄 _Rebooting system to establish fresh, synchronized secure keys..._`)
+        await sleep(2000)
+        process.exit(0)
+    } catch (err) {
+        console.error('[ClearCache Error]', err)
+        await replygcxeon(`❌ *Deep Purge Failed:* ${err?.message || err}`)
+    }
+}
+break
+case 'delsession': case 'removesession': case 'purgesession': {
+    if (!XeonTheCreator && !isCreator) return XeonStickOwner()
+    await replygcxeon(`🗑️ *Wiping Session Entirely...*\n\n_Deleting all session credentials, keys, and backups so you can link a new device or push cleanly to GitHub..._`)
+    await sleep(2000)
+    try {
+        const fs = require('fs')
+        const path = require('path')
+        const authDir = path.join(__dirname, global.sessionName || 'session')
+        const backupCredsPath = path.join(__dirname, 'database', 'session_creds_backup.json')
+        if (fs.existsSync(authDir)) fs.rmSync(authDir, { recursive: true, force: true })
+        if (fs.existsSync(backupCredsPath)) fs.unlinkSync(backupCredsPath)
+        fs.mkdirSync(authDir, { recursive: true })
+        await replygcxeon(`✅ *Session Completely Removed!*\n\n_Ready for fresh QR / pairing code or GitHub push._`)
+        await sleep(1500)
+        process.exit(0)
+    } catch (err) {
+        console.error('[DelSession Error]', err)
+        await replygcxeon(`❌ *Failed to wipe session:* ${err?.message || err}`)
+    }
+}
+break
+case 'setkey': case 'addkey': {
+    if (!XeonTheCreator && !isCreator) return XeonStickOwner()
+    if (!text || !text.includes('=')) {
+        return replygcxeon(`⚠️ *Syntax Error!*\n\nUsage: *${prefix}setkey [ai_name] = [key]*\n\n*Supported AIs:* \`gemini\` | \`openai\` | \`custom\`\n*Example:* \`${prefix}setkey gemini = your_api_key_here\``)
+    }
+
+    const parts = text.split('=')
+    const aiName = parts[0].trim().toLowerCase()
+    const aiKey = parts.slice(1).join('=').trim()
+
+    if (!aiKey) {
+        return replygcxeon(`❌ *Error:* Key value cannot be empty!`)
+    }
+
+    let targetVarName = ''
+    let displayAiName = ''
+
+    if (aiName === 'gemini') {
+        targetVarName = 'geminiKey'
+        displayAiName = 'Google Gemini'
+    } else if (aiName === 'openai' || aiName === 'custom' || aiName === 'chatgpt') {
+        targetVarName = 'customApiKey'
+        displayAiName = 'Custom OpenAI / Proxy'
+    } else {
+        return replygcxeon(`❌ *Invalid AI Engine:* \`${aiName}\`\n\nSupported engines are \`gemini\`, \`openai\`, and \`custom\`.`)
+    }
+
+    global[targetVarName] = aiKey
+
+    const overrideFile = path.join(__dirname, 'database/settings_override.json')
+    let currentOverrides = {}
+    try {
+        if (fs.existsSync(overrideFile)) {
+            currentOverrides = JSON.parse(fs.readFileSync(overrideFile, 'utf8'))
+        }
+    } catch (_) {}
+
+    currentOverrides[targetVarName] = aiKey
+    
+    try {
+        const dbDir = path.dirname(overrideFile)
+        if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true })
+        fs.writeFileSync(overrideFile, JSON.stringify(currentOverrides, null, 4))
+    } catch (err) {
+        console.error('[SETKEY PERSISTENCE ERROR]', err)
+        return replygcxeon(`⚠️ *Key updated in memory, but failed to persist to disk:* ${err?.message || err}`)
+    }
+
+    const obscuredKey = aiKey.length > 8 ? `${aiKey.slice(0, 4)}...${aiKey.slice(-4)}` : '••••••••'
+    return replygcxeon(`🔑 *API Key Configured Successfully!*\n\n• *Engine:* \`${displayAiName}\`\n• *Active Key:* \`${obscuredKey}\`\n\n⚙️ The new key has been applied in real-time and saved permanently across reboots!`)
+}
+break
 case 'myip': {
         if (!XeonTheCreator) return XeonStickOwner()
         if (m.isGroup) return XeonStickPrivate()
@@ -10403,40 +11596,42 @@ case 'invite': case 'invitar': {
 	if (!isAdmins && !XeonTheCreator) return XeonStickAdmin()
 
 	// 1. Identify Target User: Tag, Reply, or Text input
-	let targetJid = null
+	let rawInput = null
 	let customNote = ''
 
 	if (m.mentionedJid && m.mentionedJid.length > 0) {
-		targetJid = m.mentionedJid[0]
-		customNote = text.replace(new RegExp(`@${targetJid.split('@')[0]}`, 'g'), '').trim()
+		rawInput = m.mentionedJid[0]
+		customNote = text.replace(new RegExp(`@${rawInput.split('@')[0]}`, 'g'), '').trim()
 	} else if (m.quoted && m.quoted.sender) {
-		targetJid = m.quoted.sender
+		rawInput = m.quoted.sender
 		customNote = (text || '').trim()
 	} else if (text) {
 		const matchNumber = text.match(/\+?[0-9\s\-()]{7,20}/)
 		if (matchNumber) {
-			const rawNumber = matchNumber[0].replace(/[^0-9]/g, '')
-			if (rawNumber.length >= 7 && rawNumber.length <= 16) {
-				targetJid = rawNumber + '@s.whatsapp.net'
-				customNote = text.replace(matchNumber[0], '').trim()
-			}
+			rawInput = matchNumber[0]
+			customNote = text.replace(matchNumber[0], '').trim()
 		}
 	}
 
-	if (!targetJid) {
+	if (!rawInput) {
 		return replygcxeon(
 			`╭───「 💌  *GROUP INVITE SUITE*  」───\n` +
 			`│\n` +
 			`│ 📌  *How to Invite:*\n` +
 			`│ ├ 🏷️ *By Tag:* ${prefix + command} @user [optional message]\n` +
 			`│ ├ 💬 *By Reply:* Reply to a user's message with ${prefix + command}\n` +
-			`│ └ 📱 *By Number:* ${prefix + command} +234 802 939 9425 [message]\n` +
+			`│ └ 📱 *By Number:* ${prefix + command} 08029399425 [message]\n` +
 			`│\n` +
 			`│ 💡 *Examples:*\n` +
-			`│ • ${prefix + command} 2348029399425 Welcome to our squad!\n` +
+			`│ • ${prefix + command} 08029399425 Welcome to our squad!\n` +
 			`│ • ${prefix + command} @user Join us here!\n` +
 			`╰─────────────────────────────`
 		)
+	}
+
+	let targetJid = await normalizeAndValidateJid(rawInput)
+	if (!targetJid) {
+		return replygcxeon(`❌ *Invalid phone number or WhatsApp user not found!*`)
 	}
 
 	// 2. Fetch Group Details & Check Existing Members
@@ -10450,7 +11645,7 @@ case 'invite': case 'invitar': {
 	const participants = groupMeta?.participants || []
 	const isAlreadyMember = participants.some(p => p.id === targetJid || p.id?.split('@')[0] === targetJid?.split('@')[0])
 	if (isAlreadyMember) {
-		return replygcxeon(`⚠️  *User is already a member of this group!*`)
+		return replygcxeon(`⚠️  *User @${targetJid.split('@')[0]} is already a member of this group!*`, { mentions: [targetJid] })
 	}
 
 	// 3. Generate Official WhatsApp Group Invite Code
@@ -10477,44 +11672,43 @@ case 'invite': case 'invitar': {
 		groupPp = null
 	}
 
-	let cardThumbnail
+	let thumbBuffer
 	try {
-		cardThumbnail = groupPp ? { url: groupPp } : fs.readFileSync('./XeonMedia/theme/cheemspic.jpg')
+		thumbBuffer = groupPp ? await getBuffer(groupPp) : fs.readFileSync('./XeonMedia/theme/cheemspic.jpg')
 	} catch (_) {
-		cardThumbnail = undefined
+		thumbBuffer = undefined
 	}
 
-	// 5. Compose Refined Invitation Card for the Invitee
-	const inviteCardText = 
-		`👑  *𝐎𝐅𝐅𝐈𝐂𝐈𝐀𝐋  𝐆𝐑𝐎𝐔𝐏  𝐈𝐍𝐕𝐈𝐓𝐀𝐓𝐈𝐎𝐍*  👑\n` +
-		`─────────────────────────────\n` +
-		`Hello ${targetTag}, you have been personally invited to join our community!\n\n` +
-		`🏰  *Group:*  *${groupName}*\n` +
-		`👤  *Invited By:*  ${inviterTag} (${inviterName})\n` +
-		`👥  *Community:*  ${memberCount} active members\n` +
-		(customNote ? `💬  *Personal Note:*  _"${customNote}"_\n` : '') +
-		(groupDesc ? `\n📜  *About the Group:*\n_${groupDesc}${groupDesc.length >= 150 ? '...' : ''}_\n` : '') +
-		`\n🔗  *Direct Access Link:*\n${inviteLink}\n` +
-		`─────────────────────────────\n` +
-		`✨ _Tap the link above to enter the group! We look forward to having you._`
-
+	// 5. Send Native Interactive Group Invite Card + Text
 	try {
+		// Native Group Invite Payload
+		await XeonBotInc.sendMessage(targetJid, {
+			groupInviteMessage: {
+				groupJid: m.chat,
+				inviteCode: inviteCode,
+				inviteExpiration: Math.floor(Date.now() / 1000) + (3 * 86400),
+				groupName: groupName,
+				caption: customNote || `You are invited to join ${groupName}`,
+				jpegThumbnail: thumbBuffer
+			}
+		})
+
+		const inviteCardText = 
+			`👑  *𝐎𝐅𝐅𝐈𝐂𝐈𝐀𝐋  𝐆𝐑𝐎𝐔𝐏  𝐈𝐍𝐕𝐈𝐓𝐀𝐓𝐈𝐎𝐍*  👑\n` +
+			`─────────────────────────────\n` +
+			`Hello ${targetTag}, you have been personally invited to join our community!\n\n` +
+			`🏰  *Group:*  *${groupName}*\n` +
+			`👤  *Invited By:*  ${inviterTag} (${inviterName})\n` +
+			`👥  *Community:*  ${memberCount} active members\n` +
+			(customNote ? `💬  *Personal Note:*  _"${customNote}"_\n` : '') +
+			(groupDesc ? `\n📜  *About the Group:*\n_${groupDesc}${groupDesc.length >= 150 ? '...' : ''}_\n` : '') +
+			`\n🔗  *Direct Access Link:*\n${inviteLink}\n` +
+			`─────────────────────────────\n` +
+			`✨ _Tap the join button above to enter the group!_`
+
 		await XeonBotInc.sendMessage(targetJid, {
 			text: inviteCardText,
-			mentions: [targetJid, sender],
-			contextInfo: {
-				mentionedJid: [targetJid, sender],
-				externalAdReply: {
-					title: groupName,
-					body: `Invited by ${inviterName} • ${memberCount} Members`,
-					mediaType: 1,
-					renderLargerThumbnail: true,
-					thumbnail: typeof cardThumbnail === 'string' || Buffer.isBuffer(cardThumbnail) ? cardThumbnail : undefined,
-					thumbnailUrl: typeof cardThumbnail?.url === 'string' ? cardThumbnail.url : undefined,
-					sourceUrl: inviteLink,
-					mediaUrl: inviteLink
-				}
-			}
+			mentions: [targetJid, sender]
 		})
 
 		// 6. Send Confirmation Receipt in the Group
@@ -10540,7 +11734,8 @@ case 'invite': case 'invitar': {
 		await replygcxeon(
 			`⚠️  *Could not deliver invite directly to ${targetTag}'s DM.*\n` +
 			`_They may have private message restrictions or an invalid number._\n\n` +
-			`🔗  *Group Link:* ${inviteLink}`
+			`🔗  *Group Link:* ${inviteLink}`,
+			{ mentions: [targetJid] }
 		)
 	}
 }
@@ -10849,7 +12044,7 @@ case "resetotp": {
     // Safety check: Prevent targeting the Bot Owner or active Bot number
     const isTargetOwner = senderPhones.includes(targetNum) || 
                           ownerPhoneSet.has(targetNum) ||
-                          ['2348160208114', '2348029399425', '68444699525143'].includes(targetNum)
+                          ['2348160208114', '2348029399425'].includes(targetNum)
     if (isTargetOwner) {
         return replygcxeon(`🛡️ *Target Protected!*\n+${targetNum} is the Bot Owner / Active Bot number. Deactivating this number would terminate the bot session!`)
     }
