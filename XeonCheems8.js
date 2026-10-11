@@ -516,8 +516,8 @@ try {
             }
         }
     	const isUser = xeonverifieduser.includes(sender)
-    	const banUser = await XeonBotInc.fetchBlocklist()
-        const isBanned = (banUser ? banUser.includes(m.sender) : false) || banned.includes(m.sender)
+    	const banUser = await XeonBotInc.fetchBlocklist().catch(() => [])
+        const isBanned = (banUser && Array.isArray(banUser) ? banUser.includes(m.sender) : false) || (Array.isArray(banned) ? banned.includes(m.sender) : false)
     	const mentionUser = [...new Set([...(m.mentionedJid || []), ...(m.quoted ? [m.quoted.sender] : [])])]
     	const mentionByTag = type == 'extendedTextMessage' && m.message.extendedTextMessage.contextInfo != null ? m.message.extendedTextMessage.contextInfo.mentionedJid : []
         const mentionByReply = type == 'extendedTextMessage' && m.message.extendedTextMessage.contextInfo != null ? m.message.extendedTextMessage.contextInfo.participant || '' : ''

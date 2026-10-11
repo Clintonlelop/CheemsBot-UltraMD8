@@ -1318,9 +1318,6 @@ try{
 	
 })
 
-await delay(5555) 
-start('2',colors.bold.white('\n\nWaiting for New Messages..'))
-
 XeonBotInc.ev.on('creds.update', async () => {
 	try {
 		await saveCreds()
@@ -1354,11 +1351,6 @@ XeonBotInc.ev.on('creds.update', async () => {
 XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
     try {
         if (!chatUpdate.messages || !Array.isArray(chatUpdate.messages)) return
-        // Allow live notifications ('notify') as well as self/synced commands ('append' when fromMe)
-        if (chatUpdate.type && chatUpdate.type !== 'notify') {
-            const hasFromMe = chatUpdate.messages.some(m => m?.key?.fromMe);
-            if (!hasFromMe) return;
-        }
         for (const kay of chatUpdate.messages) {
             if (!kay) continue
 

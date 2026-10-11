@@ -45,4 +45,5 @@ Thumbs.db
 # Runtime databases and caches
 database/lid_map.json
 database/posted_status.json
+database/settings_override.json
 bun.lock
