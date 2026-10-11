@@ -1,1 +1,0 @@
-Grok write test successful. You can delete this file.
