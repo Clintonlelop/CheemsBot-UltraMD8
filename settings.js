@@ -19,7 +19,7 @@ global.usePairingCode = true // Set to true to use Pairing Code in terminal (NO 
 global.enableWebDashboard = true // Set to true to run the web panel on port 3000, set to false to run the bot 100% headlessly (no ports opened)
 
 // Custom API / OpenAI key
-global.customApiKey = process.env.CUSTOM_API_KEY || process.env.OPENAI_API_KEY || "sk-ws-H.DDRPIYY.4Mt5.MEUCIQDewvaUX5UpNVng9yhUWlq_hzaMsVK60h_lIAtx4r4u3wIgGsCSPRsE2nl8NCPlc56rbKe4vFOUe3KQWMpSxceV99Q"
+global.customApiKey = process.env.CUSTOM_API_KEY || process.env.OPENAI_API_KEY || ""
 global.keyopenai = global.customApiKey
 
 //documents variants
@@ -43,8 +43,8 @@ global.location = "Nigeria, Enugu, Enugu"
 
 //bot identity
 global.botname = process.env.BOT_NAME || "CLINTON BOT ULTRA MD"
-global.owner = [cleanOwnerNumber, "2348029399425", "68444699525143"]
-global.ownerNumber = [`${cleanOwnerNumber}@s.whatsapp.net`, "2348029399425@s.whatsapp.net", "68444699525143@lid", "245217517154312@lid"]
+global.owner = [cleanOwnerNumber, "2348029399425"]
+global.ownerNumber = [`${cleanOwnerNumber}@s.whatsapp.net`, "2348029399425@s.whatsapp.net"]
 global.creator = `${cleanOwnerNumber}@s.whatsapp.net`
 global.ownerweb = "https://github.com/Clintonlelop/CheemsBot-UltraMD8"
 global.websitex = "https://github.com/Clintonlelop/CheemsBot-UltraMD8"
@@ -88,9 +88,22 @@ global.mess = {
     group: 'This feature is only for groups!',
     private: 'This feature is only for private chats!',
     bot: 'This feature is only for the bot!',
-    wait: '╔═「 ⚡ *CLINTON ULTRA* 」═╗\n  ⏳  *Processing... Hold tight!* 🚀\n╚═「 ⚡ _Powered by Clinton MD_ 」═╝',
+    wait: '╔══════════════════════════╗\n  ⚡ *𝗖𝗟𝗜𝗡𝗧𝗢𝗡  𝗨𝗟𝗧𝗥𝗔  𝗠𝗗* ⚡\n  ⏳ *𝗣𝗥𝗢𝗖𝗘𝗦𝗦𝗜𝗡𝗚... 𝗛𝗢𝗟𝗗  𝗧𝗜𝗚𝗛𝗧!* 🚀\n╚══════════════════════════╝',
     premium: 'This feature is for premium users only! Contact the owner to get premium access.',
     error: 'An error occurred, please try again later.'
+}
+
+// Load runtime config overrides if present
+const overridePath = path.join(__dirname, 'database/settings_override.json')
+if (fs.existsSync(overridePath)) {
+    try {
+        const overrides = JSON.parse(fs.readFileSync(overridePath, 'utf8'))
+        for (const [key, val] of Object.entries(overrides)) {
+            global[key] = val
+        }
+    } catch (e) {
+        console.error('Error loading settings overrides:', e)
+    }
 }
 
 let file = require.resolve(__filename)
