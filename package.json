@@ -1,7 +1,7 @@
 {
   "name": "CheemsBot-UltraMD8",
   "version": "8.1.0",
-  "description": "Clinton Bot Ultra MD - WhatsApp Multi-Device automation bot with web control dashboard",
+  "description": "Clinton Bot Ultra MD - WhatsApp Multi-Device automation bot for VPS, Pterodactyl, and Termux",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {

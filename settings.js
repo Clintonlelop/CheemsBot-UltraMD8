@@ -15,8 +15,7 @@ global.autokickmorroco = false //auto kick 212 (true to on, false to off)
 global.antispam = true //auto kick spammer (true to on, false to off)
 
 //pairing code setup
-global.usePairingCode = true // Set to true to use Pairing Code in terminal (NO Web link or QR scan required!), set to false for QR code
-global.enableWebDashboard = true // Set to true to run the web panel on port 3000, set to false to run the bot 100% headlessly (no ports opened)
+global.usePairingCode = false // Set to true to prefer Pairing Code, set to false for QR scan (can also be chosen when starting the bot)
 
 // Custom API / OpenAI key
 global.customApiKey = process.env.CUSTOM_API_KEY || process.env.OPENAI_API_KEY || ""
