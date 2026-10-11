@@ -42,14 +42,24 @@ const yts = require('yt-search')
 const vm = require('node:vm')
 const { EmojiAPI } = require("emoji-api")
 const emoji = new EmojiAPI()
-const owner = JSON.parse(fs.readFileSync('./database/owner.json'))
-const prem = JSON.parse(fs.readFileSync('./database/premium.json'))
-const xeonverifieduser = JSON.parse(fs.readFileSync('./database/user.json'))
-const VoiceNoteXeon = JSON.parse(fs.readFileSync('./XeonMedia/database/xeonvn.json'))
-const StickerXeon = JSON.parse(fs.readFileSync('./XeonMedia/database/xeonsticker.json'))
-const ImageXeon = JSON.parse(fs.readFileSync('./XeonMedia/database/xeonimage.json'))
-const VideoXeon = JSON.parse(fs.readFileSync('./XeonMedia/database/xeonvideo.json'))
-const BadXeon = JSON.parse(fs.readFileSync('./database/bad.json'))
+const readJson = (file, def = []) => {
+    try {
+        if (!fs.existsSync(file)) return def;
+        const text = fs.readFileSync(file, 'utf8').trim();
+        if (!text) return def;
+        return JSON.parse(text);
+    } catch (_) {
+        return def;
+    }
+};
+const owner = readJson('./database/owner.json', [])
+const prem = readJson('./database/premium.json', [])
+const xeonverifieduser = readJson('./database/user.json', [])
+const VoiceNoteXeon = readJson('./XeonMedia/database/xeonvn.json', [])
+const StickerXeon = readJson('./XeonMedia/database/xeonsticker.json', [])
+const ImageXeon = readJson('./XeonMedia/database/xeonimage.json', [])
+const VideoXeon = readJson('./XeonMedia/database/xeonvideo.json', [])
+const BadXeon = readJson('./database/bad.json', [])
 
 // Blackjack Game Helpers
 function getCardValue(card) {
@@ -73,29 +83,21 @@ function renderHand(hand) {
 }
 
 
-let autosticker = JSON.parse(fs.readFileSync('./database/autosticker.json'))
-let ntnsfw = JSON.parse(fs.readFileSync('./database/nsfw.json'))
-let ntvirtex = JSON.parse(fs.readFileSync('./database/antivirus.json'))
-let nttoxic = JSON.parse(fs.readFileSync('./database/antitoxic.json'))
-let ntwame = JSON.parse(fs.readFileSync('./database/antiwame.json'))
-let ntstatus = []
-try {
-    if (fs.existsSync('./database/antistatus.json')) {
-        const parsedStatus = JSON.parse(fs.readFileSync('./database/antistatus.json', 'utf8'))
-        ntstatus = Array.isArray(parsedStatus) ? parsedStatus : []
-    } else {
-        fs.writeFileSync('./database/antistatus.json', JSON.stringify([], null, 2))
-    }
-} catch (_) { ntstatus = [] }
-let ntlinkgc =JSON.parse(fs.readFileSync('./database/antilinkgc.json'))
-let ntilinkall =JSON.parse(fs.readFileSync('./database/antilinkall.json'))
-let ntilinktwt =JSON.parse(fs.readFileSync('./database/antilinktwitter.json'))
-let ntilinktt =JSON.parse(fs.readFileSync('./database/antilinktiktok.json'))
-let ntilinktg =JSON.parse(fs.readFileSync('./database/antilinktelegram.json'))
-let ntilinkfb =JSON.parse(fs.readFileSync('./database/antilinkfacebook.json'))
-let ntilinkig =JSON.parse(fs.readFileSync('./database/antilinkinstagram.json'))
-let ntilinkytch =JSON.parse(fs.readFileSync('./database/antilinkytchannel.json'))
-let ntilinkytvid =JSON.parse(fs.readFileSync('./database/antilinkytvideo.json'))
+let autosticker = readJson('./database/autosticker.json', [])
+let ntnsfw = readJson('./database/nsfw.json', [])
+let ntvirtex = readJson('./database/antivirus.json', [])
+let nttoxic = readJson('./database/antitoxic.json', [])
+let ntwame = readJson('./database/antiwame.json', [])
+let ntstatus = readJson('./database/antistatus.json', [])
+let ntlinkgc = readJson('./database/antilinkgc.json', [])
+let ntilinkall = readJson('./database/antilinkall.json', [])
+let ntilinktwt = readJson('./database/antilinktwitter.json', [])
+let ntilinktt = readJson('./database/antilinktiktok.json', [])
+let ntilinktg = readJson('./database/antilinktelegram.json', [])
+let ntilinkfb = readJson('./database/antilinkfacebook.json', [])
+let ntilinkig = readJson('./database/antilinkinstagram.json', [])
+let ntilinkytch = readJson('./database/antilinkytchannel.json', [])
+let ntilinkytvid = readJson('./database/antilinkytvideo.json', [])
 
 // Persistent anti-link strike records. Keys are <groupJid>:<userJid>.
 let antilinkSettings = {}
@@ -190,7 +192,7 @@ const saveAntiLinkWarnings = () => {
 
 
 
-global.db = JSON.parse(fs.readFileSync('./database/database.json'))
+global.db = readJson('./database/database.json', {})
 if (global.db) global.db = {
 sticker: {},
 database: {}, 
@@ -10563,11 +10565,11 @@ function __lobz(){const H=['R53FWbciV9','reply','rbot_18407','\x5c(\x20*\x5c)','
             const reply = await askGemini(prompt, options)
             return replygcxeon(reply)
         } catch (error) {
-            console.error('[Gemini AI Error]', error)
-            if (error?.message === 'KEY_MISSING_GEMINI') {
-                return replygcxeon(`⚠️ *Google Gemini API Key is missing!*\n\nPlease configure your Gemini key to activate this engine by typing:\n\n\`${prefix}setkey gemini = [your key]\``)
+            const errStr = typeof error === 'object' ? (error?.message || JSON.stringify(error)) : String(error)
+            if (error?.message === 'KEY_MISSING_GEMINI' || errStr.includes('UNAUTHENTICATED') || errStr.includes('401') || errStr.includes('ACCESS_TOKEN_TYPE_UNSUPPORTED')) {
+                return replygcxeon(`⚠️ *Google Gemini API Key is missing or invalid!*\n\nPlease configure a valid Gemini API key by sending:\n\n\`${prefix}setkey gemini <your_api_key>\`\n\n💡 _Get a free Gemini API key at:_ https://aistudio.google.com/apikey`)
             }
-            return replygcxeon(`❌ *Gemini AI Error:* ${error?.message || error}`)
+            return replygcxeon(`❌ *Gemini AI Error:* ${error?.message || errStr}`)
         }
     }
     break
@@ -10814,16 +10816,25 @@ case 'delsession': case 'removesession': case 'purgesession': {
 break
 case 'setkey': case 'addkey': {
     if (!XeonTheCreator && !isCreator) return XeonStickOwner()
-    if (!text || !text.includes('=')) {
-        return replygcxeon(`⚠️ *Syntax Error!*\n\nUsage: *${prefix}setkey [ai_name] = [key]*\n\n*Supported AIs:* \`gemini\` | \`openai\` | \`custom\`\n*Example:* \`${prefix}setkey gemini = your_api_key_here\``)
+    const rawInput = (text || q || '').trim()
+    if (!rawInput) {
+        return replygcxeon(`⚠️ *Syntax Error!*\n\nUsage: *${prefix}setkey [ai_name] [key]*\n\n*Supported AIs:* \`gemini\` | \`openai\` | \`custom\`\n*Example:* \`${prefix}setkey gemini AIzaSy...D...\``)
     }
 
-    const parts = text.split('=')
-    const aiName = parts[0].trim().toLowerCase()
-    const aiKey = parts.slice(1).join('=').trim()
+    let aiName = ''
+    let aiKey = ''
+    if (rawInput.includes('=')) {
+        const parts = rawInput.split('=')
+        aiName = parts[0].trim().toLowerCase()
+        aiKey = parts.slice(1).join('=').trim()
+    } else {
+        const parts = rawInput.split(/\s+/)
+        aiName = parts[0].trim().toLowerCase()
+        aiKey = parts.slice(1).join(' ').trim()
+    }
 
     if (!aiKey) {
-        return replygcxeon(`❌ *Error:* Key value cannot be empty!`)
+        return replygcxeon(`❌ *Error:* Key value cannot be empty!\nExample: \`${prefix}setkey gemini AIzaSy...\``)
     }
 
     let targetVarName = ''
