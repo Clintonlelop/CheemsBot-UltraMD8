@@ -1,36 +1,41 @@
-# Dependency directories
 node_modules/
-jspm_packages/
-web_modules/
-
-# Local session credentials (extremely important to not commit your WhatsApp session keys!)
 session/
-creds.json
-session-keys/
-database/session_creds_backup.json
-
-# Environment files and keys
+*.log
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-*.env
-
-# Build and cache outputs
+.DS_Store
+database/session_creds_backup.json
+*.zip
+*.rar
+*.7z
+.idea/
+.vscode/
 dist/
 build/
-node-compile-cache/
-.replit
-replit.nix
-
-# Log files
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-lerna-debug.log*
-
-# System Files
-.DS_Store
-Thumbs.db
+coverage/
+*.pem
+*.key
+*.crt
+tmp/
+temp/
+*.tmp
+*.swp
+*~
+.nyc_output
+.cache
+.npm
+.eslintcache
+.stylelintcache
+.parcel-cache
+.next
+.nuxt
+.vuepress/dist
+.serverless/
+.fusebox/
+.dynamodb/
+.tern-port
+.vscode-test
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
