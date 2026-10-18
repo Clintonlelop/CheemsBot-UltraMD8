@@ -22,7 +22,7 @@ const { XeonInstaMp4 } = require('./scrape/XeonInstaMp4')
 const { XeonIgImg } = require('./scrape/XeonIgImg')
 const { XeonFb } = require('./scrape/XeonFb')
 const { XeonTwitter } = require('./scrape/XeonTwitter')
-const { askGemini, askChatGPT, generateGeminiImage } = require('./lib/gemini')
+const { askGemini, askChatGPT, askDeepSeek, generateGeminiImage } = require('./lib/gemini')
 const { askQwen } = require('./lib/qwen')
 const { gifToMp4, audioToPttOgg, generateWaveform, textToPttVoiceNote } = require('./lib/media-tools')
 const { repairSessionFolder, purgeJidSession } = require('./lib/sessionCleaner')
@@ -10591,6 +10591,24 @@ function __lobz(){const H=['R53FWbciV9','reply','rbot_18407','\x5c(\x20*\x5c)','
         }
     }
     break
+    case 'seek': case 'deepseek': case 'ds': {
+        const queryText = q || text || ''
+        if (!queryText) {
+            return replygcxeon(`🤖 *DeepSeek AI*\n\nUsage:\n• ${prefix + command} <your question/prompt>\n\n💡 _Set your DeepSeek API key using:_\n\`${prefix}setkey deepseek <your_api_key>\``)
+        }
+
+        try {
+            const reply = await askDeepSeek(queryText)
+            return replygcxeon(`🧠 *DeepSeek AI*\n\n${reply}`)
+        } catch (error) {
+            console.error('[DeepSeek AI Error]', error)
+            const errStr = typeof error === 'object' ? (error?.message || JSON.stringify(error)) : String(error)
+            if (error?.message === 'KEY_MISSING_DEEPSEEK' || errStr.includes('401') || errStr.includes('Unauthorized')) {
+                return replygcxeon(`⚠️ *DeepSeek API Key is missing or invalid!*\n\nPlease configure a valid DeepSeek API key by typing:\n\n\`${prefix}setkey deepseek <your_api_key>\``)
+            }
+            return replygcxeon(`❌ *DeepSeek AI Error:* ${error?.message || errStr}`)
+        }
+    }
     case "aimage": case "imagen": case "dalle": case "aiimage": case "aiimg": case "imagine": case "draw": case "genimage": case "text2img": case "txt2img": case "flux": case "midjourney": {
         const queryPrompt = q || text || args.join(' ')
         if (!queryPrompt) return replygcxeon(`🎨 *AI Image Generator*\n\nUsage:\n*${prefix + command} <Prompt>*\n\nExample:\n*${prefix + command} futuristic cyberpunk city at sunset 4k octane render*`)
@@ -10846,8 +10864,11 @@ case 'setkey': case 'addkey': {
     } else if (aiName === 'openai' || aiName === 'custom' || aiName === 'chatgpt') {
         targetVarName = 'customApiKey'
         displayAiName = 'Custom OpenAI / Proxy'
+    } else if (aiName === 'deepseek' || aiName === 'ds' || aiName === 'seek') {
+        targetVarName = 'deepseekKey'
+        displayAiName = 'DeepSeek AI'
     } else {
-        return replygcxeon(`❌ *Invalid AI Engine:* \`${aiName}\`\n\nSupported engines are \`gemini\`, \`openai\`, and \`custom\`.`)
+        return replygcxeon(`❌ *Invalid AI Engine:* \`${aiName}\`\n\nSupported engines are \`gemini\`, \`openai\`, and \`deepseek\`.`)
     }
 
     global[targetVarName] = aiKey
