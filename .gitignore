@@ -46,4 +46,7 @@ Thumbs.db
 database/lid_map.json
 database/posted_status.json
 database/settings_override.json
+database/reminders.json
+database/notes.json
+database/todos.json
 bun.lock

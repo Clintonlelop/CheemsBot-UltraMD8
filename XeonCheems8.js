@@ -265,6 +265,41 @@ async function getStatusContacts(store) {
     return statusContacts
 }
 
+// ================= UTILITIES PACK: JSON storage helpers =================
+const UTIL_DB_DIR = './database'
+const loadUtilJson = (file, def) => readJson(`${UTIL_DB_DIR}/${file}`, def)
+const saveUtilJson = (file, data) => { try { fs.writeFileSync(`${UTIL_DB_DIR}/${file}`, JSON.stringify(data, null, 2)) } catch (_) {} }
+
+// Reminder dispatcher: fires due reminders via the live socket
+function checkDueReminders() {
+    try {
+        const rems = loadUtilJson('reminders.json', [])
+        if (!Array.isArray(rems) || rems.length === 0) return
+        const now = Date.now()
+        const due = rems.filter(r => r && r.dueAt && r.dueAt <= now)
+        if (due.length === 0) return
+        const remaining = rems.filter(r => !(r && r.dueAt && r.dueAt <= now))
+        saveUtilJson('reminders.json', remaining)
+        const sock = global.activeSocket || global.XeonBotInc
+        if (!sock) return
+        for (const r of due) {
+            try {
+                const who = r.sender ? `@${String(r.sender).split('@')[0]}` : ''
+                sock.sendMessage(r.chat, {
+                    text: `⏰ *REMINDER* ${who}\n\n${r.text}\n\n_Set ${new Date(r.createdAt).toLocaleString()}_`,
+                    mentions: r.sender ? [r.sender] : []
+                }).catch(() => {})
+            } catch (_) {}
+        }
+    } catch (_) {}
+}
+
+// Guarded: XeonCheems8.js is hot-reloaded (nocache), never start the loop twice
+if (!global._clintonReminderLoop) {
+    global._clintonReminderLoop = true
+    setInterval(checkDueReminders, 30 * 1000)
+}
+
 module.exports = XeonBotInc = async (XeonBotInc, m, chatUpdate, store) => {
 try {
         const { type, quotedMsg, mentioned, now, fromMe } = m
@@ -9845,6 +9880,243 @@ break
   })
   }
  break
+// ================= UTILITIES PACK (reminders / notes / todo / links / dictionary / crypto / currency) =================
+case 'remind': case 'reminder': case 'remindme': {
+    if (!args[0]) return replygcxeon(`⏰ *Reminder usage:*\n${prefix + command} <time> <message>\n\n_Time:_ 30s, 10m, 2h, 1d ...\n_Example:_ ${prefix + command} 10m Call mum`)
+    const delayMs = ms(args[0])
+    if (!delayMs || delayMs < 10000) return replygcxeon('❌ Invalid time. Minimum is 10s. Examples: 30s, 10m, 2h, 1d')
+    if (delayMs > 30 * 24 * 3600 * 1000) return replygcxeon('❌ Too far ahead. Maximum reminder is 30 days.')
+    const rtext = args.slice(1).join(' ').trim()
+    if (!rtext) return replygcxeon('❌ What should I remind you about?')
+    const rems = loadUtilJson('reminders.json', [])
+    const mine = rems.filter(r => r.sender === m.sender)
+    if (mine.length >= 10) return replygcxeon('❌ You already have 10 active reminders. Delete one with *.delremind <number>*')
+    rems.push({ chat: m.chat, sender: m.sender, text: rtext, dueAt: Date.now() + delayMs, createdAt: Date.now() })
+    saveUtilJson('reminders.json', rems)
+    replygcxeon(`✅ *Reminder set!*\n⏳ In: ${args[0]}\n📝 ${rtext}\n\nI'll ping you here when it's due.`)
+}
+break
+case 'myreminders': case 'reminders': case 'listremind': {
+    const rems = loadUtilJson('reminders.json', []).filter(r => r.sender === m.sender)
+    if (!rems.length) return replygcxeon('📭 You have no active reminders.\nSet one with *.remind 10m do something*')
+    let t = `⏰ *YOUR REMINDERS (${rems.length})*\n\n`
+    rems.forEach((r, i) => {
+        const left = Math.max(0, r.dueAt - Date.now())
+        t += `*${i + 1}.* ${r.text}\n   └ ⏳ fires in ${clockString(left)}\n`
+    })
+    t += `\n_Delete with: ${prefix}delremind <number>_`
+    replygcxeon(t)
+}
+break
+case 'delremind': case 'cancelremind': case 'delreminder': {
+    if (!args[0] || isNaN(args[0])) return replygcxeon(`Usage: ${prefix + command} <number>\nSee numbers with *.myreminders*`)
+    const all = loadUtilJson('reminders.json', [])
+    const mineIdx = []
+    all.forEach((r, i) => { if (r.sender === m.sender) mineIdx.push(i) })
+    const n = parseInt(args[0]) - 1
+    if (n < 0 || n >= mineIdx.length) return replygcxeon('❌ Invalid reminder number.')
+    const gone = all.splice(mineIdx[n], 1)[0]
+    saveUtilJson('reminders.json', all)
+    replygcxeon(`🗑️ Reminder deleted:\n${gone.text}`)
+}
+break
+case 'note': case 'addnote': case 'savenote': {
+    if (!text) return replygcxeon(`📝 *Save a note:*\n${prefix + command} <your note>\n_View with_ *.notes*`)
+    if (text.length > 1000) return replygcxeon('❌ Note too long (max 1000 chars).')
+    const notes = loadUtilJson('notes.json', {})
+    if (!notes[m.sender]) notes[m.sender] = []
+    if (notes[m.sender].length >= 30) return replygcxeon('❌ You have 30 notes already. Delete one with *.delnote <number>*')
+    notes[m.sender].push({ text, at: Date.now() })
+    saveUtilJson('notes.json', notes)
+    replygcxeon(`✅ Note #${notes[m.sender].length} saved!`)
+}
+break
+case 'notes': case 'mynotes': case 'listnotes': {
+    const notes = loadUtilJson('notes.json', {})
+    const mine = notes[m.sender] || []
+    if (!mine.length) return replygcxeon('📭 No notes yet. Save one with *.note buy milk*')
+    let t = `📝 *YOUR NOTES (${mine.length})*\n\n`
+    mine.forEach((x, i) => { t += `*${i + 1}.* ${x.text}\n` })
+    t += `\n_Delete with: ${prefix}delnote <number>_`
+    replygcxeon(t)
+}
+break
+case 'delnote': case 'deletenote': case 'rmnote': {
+    if (!args[0] || isNaN(args[0])) return replygcxeon(`Usage: ${prefix + command} <number>`)
+    const notes = loadUtilJson('notes.json', {})
+    const mine = notes[m.sender] || []
+    const n = parseInt(args[0]) - 1
+    if (n < 0 || n >= mine.length) return replygcxeon('❌ Invalid note number.')
+    const gone = mine.splice(n, 1)[0]
+    notes[m.sender] = mine
+    saveUtilJson('notes.json', notes)
+    replygcxeon(`🗑️ Note deleted:\n${gone.text}`)
+}
+break
+case 'todo': case 'addtodo': {
+    if (!text) return replygcxeon(`✅ *Add a task:*\n${prefix + command} <task>\n_View with_ *.todos*`)
+    if (text.length > 500) return replygcxeon('❌ Task too long (max 500 chars).')
+    const todos = loadUtilJson('todos.json', {})
+    if (!todos[m.sender]) todos[m.sender] = []
+    if (todos[m.sender].length >= 30) return replygcxeon('❌ Task list full (30). Delete one with *.deltodo <number>*')
+    todos[m.sender].push({ text, done: false, at: Date.now() })
+    saveUtilJson('todos.json', todos)
+    replygcxeon(`✅ Task #${todos[m.sender].length} added!`)
+}
+break
+case 'todos': case 'mytodos': case 'listtodo': {
+    const todos = loadUtilJson('todos.json', {})
+    const mine = todos[m.sender] || []
+    if (!mine.length) return replygcxeon('📭 No tasks. Add one with *.todo finish assignment*')
+    let t = `✅ *YOUR TO-DO (${mine.filter(x => !x.done).length} open)*\n\n`
+    mine.forEach((x, i) => { t += `${x.done ? '☑️' : '🔲'} *${i + 1}.* ${x.text}\n` })
+    t += `\n_${prefix}donetodo <n> to tick • ${prefix}deltodo <n> to delete_`
+    replygcxeon(t)
+}
+break
+case 'donetodo': case 'tododone': case 'checktodo': {
+    if (!args[0] || isNaN(args[0])) return replygcxeon(`Usage: ${prefix + command} <number>`)
+    const todos = loadUtilJson('todos.json', {})
+    const mine = todos[m.sender] || []
+    const n = parseInt(args[0]) - 1
+    if (n < 0 || n >= mine.length) return replygcxeon('❌ Invalid task number.')
+    mine[n].done = !mine[n].done
+    todos[m.sender] = mine
+    saveUtilJson('todos.json', todos)
+    replygcxeon(mine[n].done ? `☑️ Nice! Task ${n + 1} done:\n${mine[n].text}` : `🔲 Task ${n + 1} marked open again.`)
+}
+break
+case 'deltodo': case 'deletetodo': case 'rmtodo': {
+    if (!args[0] || isNaN(args[0])) return replygcxeon(`Usage: ${prefix + command} <number>`)
+    const todos = loadUtilJson('todos.json', {})
+    const mine = todos[m.sender] || []
+    const n = parseInt(args[0]) - 1
+    if (n < 0 || n >= mine.length) return replygcxeon('❌ Invalid task number.')
+    const gone = mine.splice(n, 1)[0]
+    todos[m.sender] = mine
+    saveUtilJson('todos.json', todos)
+    replygcxeon(`🗑️ Task deleted:\n${gone.text}`)
+}
+break
+case 'shortlink': case 'shorten': case 'shorturl': case 'isgd': {
+    if (!text) return replygcxeon(`🔗 *Shorten a link:*\n${prefix + command} <long-url>`)
+    const url = text.trim().split(/\s+/)[0]
+    if (!isUrl(url)) return replygcxeon('❌ That does not look like a valid URL. Include http(s)://')
+    try {
+        const { data } = await axios.get(`https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`, { timeout: 15000 })
+        if (!data || String(data).startsWith('Error')) return replygcxeon(`❌ Could not shorten: ${data}`)
+        replygcxeon(`🔗 *SHORT LINK*\n\n*Original:* ${url}\n*Short:* ${data}`)
+    } catch (e) {
+        replygcxeon(`❌ Shortener failed: ${e?.message || e}`)
+    }
+}
+break
+case 'expand': case 'unshorten': case 'expandurl': {
+    if (!text) return replygcxeon(`🔍 *Reveal a short link:*\n${prefix + command} <short-url>`)
+    const url = text.trim().split(/\s+/)[0]
+    if (!isUrl(url)) return replygcxeon('❌ That does not look like a valid URL. Include http(s)://')
+    try {
+        const res = await axios.get(url, { timeout: 15000, maxRedirects: 5, headers: { 'User-Agent': 'Mozilla/5.0' } })
+        const finalUrl = (res && res.request && res.request.res && res.request.res.responseUrl) || url
+        replygcxeon(`🔍 *EXPANDED LINK*\n\n*Short:* ${url}\n*Goes to:* ${finalUrl}`)
+    } catch (e) {
+        const finalUrl = e && e.request && e.request.res && e.request.res.responseUrl
+        if (finalUrl && finalUrl !== url) return replygcxeon(`🔍 *EXPANDED LINK*\n\n*Short:* ${url}\n*Goes to:* ${finalUrl}`)
+        replygcxeon(`❌ Could not expand: ${e?.message || e}`)
+    }
+}
+break
+case 'dictionary': case 'dict': case 'meaning': case 'wordmean': {
+    if (!text) return replygcxeon(`📖 *Look up a word:*\n${prefix + command} <word>\n_Example:_ ${prefix + command} serendipity`)
+    const word = text.trim().split(/\s+/)[0].toLowerCase()
+    try {
+        const { data } = await axios.get(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`, { timeout: 15000 })
+        const entry = Array.isArray(data) ? data[0] : null
+        if (!entry) return replygcxeon(`❌ No definition found for *${word}*`)
+        let t = `📖 *${String(entry.word || word).toUpperCase()}*`
+        if (entry.phonetic) t += `  _${entry.phonetic}_`
+        t += `\n\n`
+        let count = 0
+        for (const mng of (entry.meanings || []).slice(0, 3)) {
+            t += `🔹 *${mng.partOfSpeech}*\n`
+            for (const d of (mng.definitions || []).slice(0, 2)) {
+                count++
+                t += `${count}. ${d.definition}\n`
+                if (d.example) t += `   💬 _"${d.example}"_\n`
+            }
+            t += `\n`
+        }
+        replygcxeon(t.trim())
+    } catch (e) {
+        if (e && e.response && e.response.status === 404) return replygcxeon(`❌ No definition found for *${word}*`)
+        replygcxeon(`❌ Dictionary failed: ${e?.message || e}`)
+    }
+}
+break
+case 'crypto': case 'coin': case 'price': case 'btc': case 'eth': {
+    const COINS = { btc: 'bitcoin', eth: 'ethereum', sol: 'solana', usdt: 'tether', bnb: 'binancecoin', xrp: 'ripple', doge: 'dogecoin', ada: 'cardano', trx: 'tron', ton: 'the-open-network', avax: 'avalanche-2', link: 'chainlink', dot: 'polkadot', ltc: 'litecoin', shib: 'shiba-inu', pepe: 'pepe' }
+    let syms = []
+    if (command === 'btc') syms = ['btc']
+    else if (command === 'eth') syms = ['eth']
+    else {
+        if (!text) return replygcxeon(`🪙 *Crypto prices:*\n${prefix}crypto <coin> [coin2]...\n_Supported:_ ${Object.keys(COINS).join(', ')}\n\n_Shortcuts:_ *.btc*   *.eth*`)
+        syms = text.toLowerCase().split(/[\s,]+/).filter(Boolean)
+    }
+    const ids = [...new Set(syms.map(s => COINS[s]).filter(Boolean))]
+    const bad = [...new Set(syms.filter(s => !COINS[s]))]
+    if (!ids.length) return replygcxeon(`❌ Unknown coin. Supported: ${Object.keys(COINS).join(', ')}`)
+    try {
+        const { data } = await axios.get(`https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(',')}&vs_currencies=usd,ngn&include_24hr_change=true`, { timeout: 20000 })
+        const fmt = (n) => n >= 1000 ? Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 }) : n >= 1 ? Number(n).toLocaleString('en-US', { maximumFractionDigits: 4 }) : String(n)
+        let t = `🪙 *CRYPTO PRICES*\n\n`
+        for (const id of ids) {
+            const sym = Object.keys(COINS).find(k => COINS[k] === id).toUpperCase()
+            const d = data[id]
+            if (!d || d.usd === undefined) { t += `▪️ *${sym}:* n/a\n`; continue }
+            const chg = Number(d.usd_24h_change || 0)
+            const arrow = chg >= 0 ? '🟢' : '🔴'
+            t += `▪️ *${sym}*\n   💵 $${fmt(d.usd)}  |  ₦${fmt(d.ngn)}\n   ${arrow} 24h: ${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%\n`
+        }
+        if (bad.length) t += `\n⚠️ Skipped unknown: ${bad.join(', ')}`
+        replygcxeon(t.trim())
+    } catch (e) {
+        const limited = e && e.response && e.response.status === 429
+        replygcxeon(`❌ Price fetch failed: ${limited ? 'rate limited, try again in a minute' : (e?.message || e)}`)
+    }
+}
+break
+case 'convert': case 'currency': case 'exchange': {
+    if (!text) return replygcxeon(`💱 *Convert currency:*\n${prefix + command} <amount> <FROM> <TO>\n_Example:_ ${prefix + command} 5000 NGN USD`)
+    const parts = text.trim().split(/\s+/)
+    if (parts.length < 3) return replygcxeon(`❌ Format: ${prefix + command} <amount> <FROM> <TO>\n_Example:_ ${prefix + command} 5000 NGN USD`)
+    const amount = parseFloat(String(parts[0]).replace(/,/g, ''))
+    const fromC = String(parts[1]).toUpperCase(), toC = String(parts[2]).toUpperCase()
+    if (isNaN(amount)) return replygcxeon('❌ Amount must be a number.')
+    if (!/^[A-Z]{3}$/.test(fromC) || !/^[A-Z]{3}$/.test(toC)) return replygcxeon('❌ Use 3-letter codes, e.g. NGN, USD, EUR, GBP, GHS, KES.')
+    try {
+        const { data } = await axios.get(`https://open.er-api.com/v6/latest/${fromC}`, { timeout: 20000 })
+        if (!data || data.result !== 'success' || !data.rates || !data.rates[toC]) return replygcxeon(`❌ Could not convert ${fromC} → ${toC}. Check the codes.`)
+        const rate = data.rates[toC]
+        const out = amount * rate
+        replygcxeon(`💱 *CURRENCY CONVERT*\n\n💰 ${amount.toLocaleString()} ${fromC} = *${out.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${toC}*\n📊 Rate: 1 ${fromC} = ${rate} ${toC}\n🕐 _${data.time_last_update_utc || ''}_`)
+    } catch (e) {
+        replygcxeon(`❌ Conversion failed: ${e?.message || e}`)
+    }
+}
+break
+case 'rate': case 'exrate': case 'usdrate': {
+    const pair = (text || 'USD NGN').trim().split(/\s+/)
+    const fromC = String(pair[0] || 'USD').toUpperCase(), toC = String(pair[1] || 'NGN').toUpperCase()
+    if (!/^[A-Z]{3}$/.test(fromC) || !/^[A-Z]{3}$/.test(toC)) return replygcxeon(`❌ Format: ${prefix + command} <FROM> <TO>\n_Example:_ ${prefix}rate USD NGN`)
+    try {
+        const { data } = await axios.get(`https://open.er-api.com/v6/latest/${fromC}`, { timeout: 20000 })
+        if (!data || data.result !== 'success' || !data.rates || !data.rates[toC]) return replygcxeon(`❌ No rate for ${fromC} → ${toC}.`)
+        replygcxeon(`📊 *EXCHANGE RATE*\n\n1 ${fromC} = *${data.rates[toC]}* ${toC}\n1 ${toC} = *${(1 / data.rates[toC]).toPrecision(6)}* ${fromC}`)
+    } catch (e) {
+        replygcxeon(`❌ Rate fetch failed: ${e?.message || e}`)
+    }
+}
+break
 case 'git': case 'gitclone':
 if (!args[0]) return replygcxeon(`Where is the link?\nExample :\n${prefix}${command} https://github.com/DGXeon/XeonMedia`)
 if (!isUrl(args[0]) && !args[0].includes('github.com')) return replygcxeon(`Link invalid!!`)
